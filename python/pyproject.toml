@@ -36,7 +36,7 @@ classifiers = [
 
 [tool.maturin]
 python-source = "python"
-python-packages = ["lance_graph", "knowledge_graph"]
+python-packages = ["lance_graph", "knowledge_graph", "nist_rmf_compliance"]
 
 [build-system]
 requires = ["maturin>=1.4"]
@@ -45,9 +45,11 @@ build-backend = "maturin"
 [project.optional-dependencies]
 tests = ["pytest", "pyarrow>=14", "pandas", "ruff"]
 dev = ["ruff", "pyright"]
+compliance = ["anthropic>=0.40.0", "playwright>=1.40.0"]
 
 [project.scripts]
 knowledge_graph = "knowledge_graph.main:main"
+nist-rmf-compliance = "nist_rmf_compliance.cli.main:main"
 
 [tool.ruff]
 lint.select = ["F", "E", "W", "I", "G", "TCH", "PERF", "B019"]
