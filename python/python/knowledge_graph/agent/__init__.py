@@ -2,6 +2,12 @@
 
 from .cdr_agent import CDRInvestigationAgent
 from .config import AgentConfig, ModelConfig, RouterConfig
+from .duckdb_tools import (
+    DataAnalysisTool,
+    DuckDBQueryTool,
+    NodeProposalGenerator,
+)
+from .integrated_agent import IntegratedCDRAgent
 from .tools import CDRAnalysisTool, GraphQueryTool
 from .types import (
     AddEdgeChange,
@@ -19,11 +25,15 @@ from .types import (
 
 __all__ = [
     "CDRInvestigationAgent",
+    "IntegratedCDRAgent",
     "AgentConfig",
     "ModelConfig",
     "RouterConfig",
     "GraphQueryTool",
     "CDRAnalysisTool",
+    "DuckDBQueryTool",
+    "DataAnalysisTool",
+    "NodeProposalGenerator",
     "Proposal",
     "ProposalStatus",
     "Change",

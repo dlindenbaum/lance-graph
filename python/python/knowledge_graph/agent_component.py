@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from .agent import CDRInvestigationAgent, ChatRequest, ChatResponse
+from .agent import IntegratedCDRAgent, ChatRequest, ChatResponse
 from .config import KnowledgeGraphConfig
 from .service import LanceKnowledgeGraph
 from .store import LanceGraphStore
@@ -15,10 +15,15 @@ from .store import LanceGraphStore
 class GraphReviewAgentComponent:
     """FastAPI routes for the graph review agent."""
 
-    def __init__(self, config: Optional[KnowledgeGraphConfig] = None):
+    def __init__(
+        self,
+        config: Optional[KnowledgeGraphConfig] = None,
+        duckdb_path: Optional[str] = None,
+    ):
         self._config = config or KnowledgeGraphConfig.default()
+        self._duckdb_path = duckdb_path
         self._service: Optional[LanceKnowledgeGraph] = None
-        self._agent: Optional[CDRInvestigationAgent] = None
+        self._agent: Optional[IntegratedCDRAgent] = None
         self.router = APIRouter(tags=["graph-review-agent"])
         self._setup_routes()
 
@@ -34,17 +39,18 @@ class GraphReviewAgentComponent:
                 raise HTTPException(status_code=500, detail=str(exc)) from exc
         return self._service
 
-    def _get_agent(self) -> CDRInvestigationAgent:
-        """Get or create the CDR investigation agent."""
+    def _get_agent(self) -> IntegratedCDRAgent:
+        """Get or create the integrated CDR investigation agent."""
         if self._agent is None:
             from .agent import AgentConfig
 
             service = self._get_service()
             # Agent config is loaded from environment variables
             agent_config = AgentConfig.from_env()
-            self._agent = CDRInvestigationAgent(
+            self._agent = IntegratedCDRAgent(
                 service=service,
                 config=agent_config,
+                duckdb_path=self._duckdb_path,
             )
         return self._agent
 
@@ -74,12 +80,12 @@ class GraphReviewAgentComponent:
         async def get_agent_status() -> Dict[str, Any]:
             """Get the current agent status."""
             agent = self._get_agent()
-            router_stats = agent.get_router_stats()
+            stats = agent.get_router_stats()
             return {
                 "status": "ready",
                 "iteration_count": agent.iteration_count,
                 "conversation_length": len(agent.conversation_history),
-                "router": router_stats,
+                **stats,
                 "config": {
                     "temperature": agent.config.temperature,
                     "max_tokens": agent.config.max_tokens,
@@ -119,5 +125,7 @@ class GraphReviewAgentComponent:
 
     def close(self) -> None:
         """Release retained resources."""
+        if self._agent:
+            self._agent.close()
         self._service = None
         self._agent = None
