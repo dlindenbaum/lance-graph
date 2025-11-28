@@ -1,15 +1,15 @@
-"""CDR Investigation Agent using LiteLLM Router for multi-model support."""
+"""CDR Investigation Agent using LiteLLM for LLM integration."""
 
 from __future__ import annotations
 
 import json
-import logging
+import os
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from litellm import Router
+import litellm
 
-from .config import AgentConfig
 from .tools import CDRAnalysisTool, GraphQueryTool
 from .types import (
     AddEdgeChange,
@@ -23,78 +23,26 @@ from .types import (
 if TYPE_CHECKING:
     from ..service import LanceKnowledgeGraph
 
-logger = logging.getLogger(__name__)
-
 
 class CDRInvestigationAgent:
-    """Agent for investigating Call Data Records using LiteLLM Router.
-
-    Uses LiteLLM's Router for:
-    - Multi-model support with automatic fallbacks
-    - Load balancing across models
-    - Retry logic and error handling
-    - Cost tracking
-    """
+    """Agent for investigating Call Data Records using LiteLLM."""
 
     def __init__(
         self,
         service: "LanceKnowledgeGraph",
-        config: Optional[AgentConfig] = None,
+        model: str = "gpt-4o-mini",
+        temperature: float = 0.7,
     ):
         self.service = service
-        self.config = config or AgentConfig.from_env()
+        self.model = model
+        self.temperature = temperature
         self.graph_tool = GraphQueryTool(service)
         self.cdr_tool = CDRAnalysisTool(self.graph_tool)
         self.conversation_history: List[Dict[str, str]] = []
         self.iteration_count = 0
 
-        # Set up logging
-        logging.basicConfig(level=self.config.log_level)
-
-        # Initialize LiteLLM Router
-        self._setup_router()
-
-    def _setup_router(self) -> None:
-        """Set up the LiteLLM router with configured models."""
-        if not self.config.router.models:
-            logger.warning("No models configured, using default GPT-4o-mini")
-            # Fallback to basic model if router not configured
-            self.router = None
-            self.fallback_model = "gpt-4o-mini"
-            return
-
-        try:
-            # Convert our config to LiteLLM router format
-            model_list = []
-            for model_config in self.config.router.models:
-                model_list.append(
-                    {
-                        "model_name": model_config.model_name,
-                        "litellm_params": {
-                            "model": model_config.model_name,
-                            **model_config.litellm_params,
-                        },
-                        "model_info": model_config.model_info,
-                    }
-                )
-
-            self.router = Router(
-                model_list=model_list,
-                routing_strategy=self.config.router.routing_strategy,
-                num_retries=self.config.router.retry_policy.get("num_retries", 2),
-                timeout=self.config.router.retry_policy.get("timeout", 30),
-                fallbacks=self.config.router.fallbacks,
-                set_verbose=self.config.log_level == "DEBUG",
-            )
-
-            logger.info(
-                f"Initialized LiteLLM Router with {len(model_list)} models: "
-                f"{[m['model_name'] for m in model_list]}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to initialize router: {e}")
-            self.router = None
-            self.fallback_model = "gpt-4o-mini"
+        # Configure LiteLLM
+        litellm.set_verbose = False
 
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the agent."""
@@ -136,8 +84,7 @@ Always be specific, provide evidence, and assign confidence scores based on data
 
     def _create_tool_descriptions(self) -> str:
         """Create descriptions of available tools."""
-        schema = self.graph_tool.get_schema()
-        return f"""
+        return """
 Available Analysis Tools:
 1. query_graph(query) - Execute Cypher queries on the graph
 2. search_nodes(label, **filters) - Search for nodes by label and properties
@@ -146,8 +93,8 @@ Available Analysis Tools:
 5. get_phone_owner(phone) - Look up the owner of a phone number
 
 Current Graph Schema:
-- Nodes: {', '.join(schema.get('nodes', []))}
-- Relationships: {', '.join(schema.get('relationships', []))}
+- Nodes: Person, Phone, Location, Account
+- Relationships: CONTACTED, OWNED_BY, LOCATED_AT
 """
 
     def _execute_tool(self, tool_name: str, **kwargs: Any) -> Any:
@@ -171,22 +118,12 @@ Current Graph Schema:
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
-            logger.error(f"Tool execution error: {e}")
             return {"error": str(e)}
 
     async def process_message(
-        self,
-        user_message: str,
-        case_id: Optional[str] = None,
-        model_override: Optional[str] = None,
+        self, user_message: str, case_id: Optional[str] = None
     ) -> ChatResponse:
-        """Process a user message and generate a response with optional proposal.
-
-        Args:
-            user_message: The user's query or instruction
-            case_id: Optional case identifier
-            model_override: Optional specific model to use (bypasses router)
-        """
+        """Process a user message and generate a response with optional proposal."""
         # Add user message to history
         self.conversation_history.append({"role": "user", "content": user_message})
 
@@ -197,32 +134,15 @@ Current Graph Schema:
         ] + self.conversation_history
 
         try:
-            # Use router if available, otherwise fall back to basic completion
-            if self.router and not model_override:
-                logger.info(f"Using router with strategy: {self.config.router.routing_strategy}")
-                response = await self.router.acompletion(
-                    model=self.config.router.models[0].model_name,  # Router handles selection
-                    messages=messages,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
-                )
-            else:
-                # Fallback to basic litellm
-                import litellm
-                model = model_override or getattr(self, "fallback_model", "gpt-4o-mini")
-                logger.info(f"Using fallback model: {model}")
-                response = await litellm.acompletion(
-                    model=model,
-                    messages=messages,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
-                )
+            # Call LLM using LiteLLM
+            response = await litellm.acompletion(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=2000,
+            )
 
             assistant_message = response.choices[0].message.content
-
-            # Log usage stats if available
-            if hasattr(response, "usage"):
-                logger.info(f"Token usage: {response.usage}")
 
             # Add to conversation history
             self.conversation_history.append(
@@ -243,7 +163,6 @@ Current Graph Schema:
             return ChatResponse(message=message, proposal=proposal)
 
         except Exception as e:
-            logger.error(f"Error processing message: {e}", exc_info=True)
             # Return error message
             error_message = Message(
                 id=f"msg-{uuid.uuid4()}",
@@ -321,27 +240,10 @@ Current Graph Schema:
 
         except json.JSONDecodeError:
             return None
-        except Exception as e:
-            logger.error(f"Error parsing proposal: {e}")
+        except Exception:
             return None
 
     def reset_conversation(self) -> None:
         """Reset the conversation history."""
         self.conversation_history = []
         self.iteration_count = 0
-
-    def get_router_stats(self) -> Dict[str, Any]:
-        """Get router statistics if available."""
-        if not self.router:
-            return {"error": "Router not initialized"}
-
-        try:
-            # Get deployment stats from router
-            return {
-                "models": [m.model_name for m in self.config.router.models],
-                "routing_strategy": self.config.router.routing_strategy,
-                "fallbacks_configured": len(self.config.router.fallbacks) > 0,
-            }
-        except Exception as e:
-            logger.error(f"Error getting router stats: {e}")
-            return {"error": str(e)}

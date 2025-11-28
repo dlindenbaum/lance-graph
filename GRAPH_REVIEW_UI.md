@@ -38,12 +38,16 @@ The Graph Review UI provides:
 
 ### Backend
 - **FastAPI** web service
-- **LiteLLM** for LLM integration (supports OpenAI, Google, Anthropic, etc.)
+- **LiteLLM Router** for multi-model LLM integration with automatic fallbacks
 - **lance-graph** for graph query engine
 - **Lance** for persistent storage
 
 ### Agent
-- **LiteLLM** as abstraction layer for multiple LLM providers
+- **LiteLLM Router** for intelligent model selection and failover:
+  - Automatic fallback between models
+  - Load balancing strategies (usage-based, latency-based, least-busy)
+  - Retry logic and error handling
+  - Cost tracking across providers
 - Custom tools for CDR analysis
 - Cypher query integration
 
@@ -162,34 +166,107 @@ The frontend will be available at `http://localhost:3000`.
 
 ## Configuration
 
-### LLM Provider Configuration
+### LLM Router Configuration
 
-The agent uses LiteLLM, which supports multiple providers:
+The agent uses **LiteLLM Router** for intelligent multi-model support with automatic fallbacks.
 
-**OpenAI:**
+#### Automatic Configuration (Environment Variables)
+
+The router automatically detects and configures available models based on environment variables:
+
+```bash
+# Primary model (if any of these are set, they'll be added to router)
+export OPENAI_API_KEY=sk-...           # Adds gpt-4o-mini
+export GEMINI_API_KEY=...              # Adds gemini/gemini-1.5-flash
+export ANTHROPIC_API_KEY=...           # Adds claude-3-5-sonnet
+export AZURE_API_KEY=...               # Adds azure/gpt-4o-mini
+export AZURE_API_BASE=https://...
+
+# Optional: Override routing strategy
+export LITELLM_ROUTING_STRATEGY=usage-based-routing  # Options: simple-shuffle, least-busy, usage-based-routing, latency-based-routing
+export AGENT_TEMPERATURE=0.7
+export AGENT_MAX_TOKENS=2000
+export AGENT_LOG_LEVEL=INFO
+```
+
+#### Routing Strategies
+
+1. **usage-based-routing** (default): Routes to model with lowest usage
+   - Best for cost optimization
+   - Evenly distributes load across models
+
+2. **simple-shuffle**: Random distribution
+   - Simple load balancing
+   - Good for general purpose
+
+3. **least-busy**: Routes to model with fewest active requests
+   - Best for high-load scenarios
+   - Optimizes throughput
+
+4. **latency-based-routing**: Routes to fastest responding model
+   - Best for performance-critical applications
+   - Minimizes response time
+
+#### Example Configurations
+
+**Cost-Optimized (Free/Cheap Models):**
+```bash
+export GEMINI_API_KEY=your-key
+export OPENAI_API_KEY=sk-your-key
+export LITELLM_ROUTING_STRATEGY=usage-based-routing
+# Primary: Gemini Flash (free tier), Fallback: GPT-4o-mini
+```
+
+**High Availability (Multiple Providers):**
 ```bash
 export OPENAI_API_KEY=sk-...
-export LITELLM_MODEL=gpt-4o-mini
-```
-
-**Google (Gemini):**
-```bash
 export GEMINI_API_KEY=...
-export LITELLM_MODEL=gemini/gemini-1.5-pro
-```
-
-**Anthropic:**
-```bash
 export ANTHROPIC_API_KEY=...
-export LITELLM_MODEL=claude-3-5-sonnet-20241022
+export LITELLM_ROUTING_STRATEGY=simple-shuffle
+# Distributes across all 3 providers with automatic fallbacks
 ```
 
-**Azure OpenAI:**
+**Performance Critical:**
 ```bash
-export AZURE_API_KEY=...
-export AZURE_API_BASE=https://...
-export LITELLM_MODEL=azure/gpt-4
+export OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=...
+export LITELLM_ROUTING_STRATEGY=latency-based-routing
+# Uses fastest responding model
 ```
+
+#### Fallback Chain
+
+When you set multiple API keys, the router automatically creates a fallback chain:
+
+```
+Request → GPT-4o-mini (primary)
+    ↓ (if fails)
+   Gemini Flash (fallback 1)
+    ↓ (if fails)
+   Claude Sonnet (fallback 2)
+    ↓ (if all fail)
+   Error response
+```
+
+#### Monitoring
+
+Check router status:
+```bash
+curl http://localhost:8000/api/agent/status
+```
+
+Returns configuration and stats:
+```json
+{
+  "router": {
+    "models": ["gpt-4o-mini", "gemini/gemini-1.5-flash"],
+    "routing_strategy": "usage-based-routing",
+    "fallbacks_configured": true
+  }
+}
+```
+
+See [IMPLEMENTATION_REVIEW.md](./IMPLEMENTATION_REVIEW.md) for detailed router documentation.
 
 ### Graph Configuration
 

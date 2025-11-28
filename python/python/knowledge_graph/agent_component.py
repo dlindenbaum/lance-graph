@@ -37,11 +37,14 @@ class GraphReviewAgentComponent:
     def _get_agent(self) -> CDRInvestigationAgent:
         """Get or create the CDR investigation agent."""
         if self._agent is None:
+            from .agent import AgentConfig
+
             service = self._get_service()
+            # Agent config is loaded from environment variables
+            agent_config = AgentConfig.from_env()
             self._agent = CDRInvestigationAgent(
                 service=service,
-                model="gpt-4o-mini",  # Can be configured via env or config
-                temperature=0.7,
+                config=agent_config,
             )
         return self._agent
 
@@ -71,11 +74,17 @@ class GraphReviewAgentComponent:
         async def get_agent_status() -> Dict[str, Any]:
             """Get the current agent status."""
             agent = self._get_agent()
+            router_stats = agent.get_router_stats()
             return {
                 "status": "ready",
                 "iteration_count": agent.iteration_count,
                 "conversation_length": len(agent.conversation_history),
-                "model": agent.model,
+                "router": router_stats,
+                "config": {
+                    "temperature": agent.config.temperature,
+                    "max_tokens": agent.config.max_tokens,
+                    "routing_strategy": agent.config.router.routing_strategy,
+                },
             }
 
         @self.router.websocket("/agent/ws")
