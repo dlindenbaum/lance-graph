@@ -8,6 +8,10 @@ This repository contains:
 - `python/` – PyO3 bindings and Python packages:
   - `lance_graph` – thin wrapper around the Rust query engine
   - `knowledge_graph` – Lance-backed knowledge graph CLI, API, and utilities
+- `web/` – Graph Review UI:
+  - React + TypeScript frontend for agent-driven graph investigation
+  - Agent review interface for CDR (Call Data Record) analysis
+  - See [GRAPH_REVIEW_UI.md](./GRAPH_REVIEW_UI.md) for details
 
 ## Prerequisites
 
@@ -140,6 +144,35 @@ pytest python/tests/test_graph.py::test_basic_node_selection -v
 
 The Python README (`python/README.md`) contains additional details if you are
 working solely on the bindings.
+
+## Graph Review UI
+
+An agent-driven interface for investigating Call Data Records and building knowledge graphs interactively. Features:
+
+- **AI Agent Investigation**: Natural language queries analyzed by LLM
+- **Proposal Review**: Pull request-style review for graph modifications
+- **Inline Editing**: Modify proposed changes before committing
+- **Evidence Tracking**: View confidence scores and reasoning
+- **Multiple LLM Support**: OpenAI, Google, Anthropic, and more via LiteLLM
+
+### Quick Start
+
+```bash
+# Start backend
+cd python
+source .venv/bin/activate
+export OPENAI_API_KEY=sk-...
+uv run python -m knowledge_graph.webservice
+
+# Start frontend (new terminal)
+cd web
+npm install
+npm run dev
+```
+
+Visit `http://localhost:3000` to begin investigating.
+
+See [GRAPH_REVIEW_UI.md](./GRAPH_REVIEW_UI.md) for complete documentation.
 
 ## Benchmarks
 
