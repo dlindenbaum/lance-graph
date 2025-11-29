@@ -21,6 +21,7 @@ from .duckdb_tools import (
     DuckDBQueryTool,
     NodeProposalGenerator,
 )
+from .mcp_integration import MCPContextManager, MCPSkillsProvider
 from .ontology import GraphOntology, OntologyTemplates
 from .tools import GraphQueryTool
 from .types import (
@@ -56,6 +57,9 @@ class DataInvestigationAgent:
         duckdb_path: Optional[Union[str, Path]] = None,
         ontology: Optional[GraphOntology] = None,
         ontology_path: Optional[Union[str, Path]] = None,
+        enable_mcp: bool = True,
+        context_file: Optional[Path] = None,
+        skills_file: Optional[Path] = None,
     ):
         self.service = service
         self.config = config or AgentConfig.from_env()
@@ -78,6 +82,18 @@ class DataInvestigationAgent:
 
         if duckdb_path:
             self._setup_duckdb_tools(duckdb_path)
+
+        # Initialize MCP context and skills
+        self.mcp_context: Optional[MCPContextManager] = None
+        self.mcp_skills: Optional[MCPSkillsProvider] = None
+
+        if enable_mcp:
+            self.mcp_context = MCPContextManager(
+                context_file=context_file,
+                skills_file=skills_file,
+            )
+            self.mcp_skills = MCPSkillsProvider(self.mcp_context)
+            logger.info(f"MCP enabled with {len(self.mcp_context.list_skills())} skills")
 
         # Initialize LiteLLM Router
         self._setup_router()
@@ -501,6 +517,12 @@ IMPORTANT:
                 },
             ])
 
+        # Add MCP custom skills as tools
+        if self.mcp_skills:
+            mcp_tools = self.mcp_skills.get_skill_tools()
+            tools.extend(mcp_tools)
+            logger.debug(f"Added {len(mcp_tools)} MCP skill tools")
+
         return tools
 
     def _execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
@@ -567,6 +589,15 @@ IMPORTANT:
                 )
                 return {"success": True, "proposals": result}
 
+            # MCP custom skills
+            elif tool_name.startswith("skill_") and self.mcp_skills:
+                prompt = self.mcp_skills.execute_skill(tool_name, arguments)
+                return {
+                    "success": True,
+                    "prompt": prompt,
+                    "note": "Apply this prompt to continue your investigation"
+                }
+
             else:
                 return {"success": False, "error": f"Unknown tool: {tool_name}"}
 
@@ -626,6 +657,10 @@ IMPORTANT:
         messages = [
             {"role": "system", "content": self._get_system_prompt()},
         ] + self.conversation_history
+
+        # Inject MCP context if available
+        if self.mcp_context:
+            messages = self.mcp_context.inject_context_into_messages(messages)
 
         tools = self._get_tool_schemas()
         max_iterations = 10  # Prevent infinite loops

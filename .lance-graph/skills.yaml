@@ -1,0 +1,107 @@
+# Custom Skills for Lance Graph Agent
+# These are reusable prompt templates that extend the agent's capabilities
+
+analyze_timeline:
+  description: "Analyze temporal patterns in communications or events"
+  prompt_template: |
+    Analyze the timeline of {entity_type} for {target}.
+    Focus on:
+    1. Frequency patterns over time
+    2. Anomalous time periods
+    3. Temporal correlations with other entities
+
+    Use SQL queries on the {table_name} table to gather data, then propose relevant nodes and relationships.
+
+    Highlight any significant patterns in your analysis.
+  parameters:
+    - entity_type
+    - target
+    - table_name
+
+identify_network:
+  description: "Identify and map network connections around an entity"
+  prompt_template: |
+    Map the network of {degree}-degree connections around {central_entity}.
+
+    Steps:
+    1. Find all direct connections to {central_entity}
+    2. For each connection, find their connections (up to {degree} degrees)
+    3. Calculate centrality metrics (who is most connected?)
+    4. Identify clusters or communities
+    5. Propose relationships that represent the network structure
+
+    Focus on {relationship_type} relationships.
+  parameters:
+    - central_entity
+    - degree
+    - relationship_type
+
+detect_anomalies:
+  description: "Find statistical anomalies in entity behavior"
+  prompt_template: |
+    Detect anomalies in {metric} for {entity_type} entities in table {table_name}.
+
+    Analysis approach:
+    1. Calculate statistical baseline (mean, std dev) for {metric}
+    2. Identify outliers beyond {threshold} standard deviations
+    3. Temporal analysis - when do anomalies occur?
+    4. Entity analysis - which entities are outliers?
+
+    Propose nodes for anomalous entities with high confidence scores.
+  parameters:
+    - entity_type
+    - metric
+    - table_name
+    - threshold
+
+compare_entities:
+  description: "Compare two entities across multiple dimensions"
+  prompt_template: |
+    Compare {entity1} and {entity2} across these dimensions:
+    1. Shared connections (common nodes they're both connected to)
+    2. Activity patterns (frequency, timing, volume)
+    3. Property similarities and differences
+    4. Network position (centrality, clustering)
+
+    Determine similarity score and identify potential merge if they appear to be the same entity.
+    If similarity > 0.8, propose a merge_nodes change.
+  parameters:
+    - entity1
+    - entity2
+
+enrich_entity:
+  description: "Enrich an entity with additional properties from external data"
+  prompt_template: |
+    Enrich the {entity_type} entity "{entity_label}" with additional properties.
+
+    Data sources to check:
+    {data_sources}
+
+    Steps:
+    1. Search for {entity_label} across all available data sources
+    2. Extract relevant properties (avoid duplicates)
+    3. Validate data quality and consistency
+    4. Propose a modify_node change with new properties
+
+    Prioritize high-confidence properties with clear evidence.
+  parameters:
+    - entity_type
+    - entity_label
+    - data_sources
+
+summarize_investigation:
+  description: "Provide a comprehensive summary of investigation findings"
+  prompt_template: |
+    Summarize the investigation focusing on {focus_area}.
+
+    Include:
+    1. Key entities discovered
+    2. Important relationships identified
+    3. Patterns and anomalies found
+    4. Confidence levels for major findings
+    5. Recommended next steps
+
+    Format as a structured report suitable for {audience}.
+  parameters:
+    - focus_area
+    - audience
