@@ -1,4 +1,8 @@
-"""DuckDB tools for searching and analyzing external data sources."""
+"""Generic DuckDB tools for searching and analyzing any type of data.
+
+These tools are domain-agnostic and work with any database schema.
+Entity discovery and proposal generation are guided by the ontology.
+"""
 
 from __future__ import annotations
 
@@ -11,11 +15,13 @@ try:
 except ImportError:
     duckdb = None
 
+from .ontology import GraphOntology
+
 logger = logging.getLogger(__name__)
 
 
 class DuckDBQueryTool:
-    """Tool for querying DuckDB databases with SQL."""
+    """Generic tool for querying DuckDB databases with SQL."""
 
     def __init__(
         self,
@@ -110,6 +116,19 @@ class DuckDBQueryTool:
             logger.error(f"Error getting schema for {table_name}: {e}")
             return [{"error": str(e)}]
 
+    def get_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Get sample rows from a table for schema inference.
+
+        Args:
+            table_name: Name of the table
+            limit: Number of sample rows to return
+
+        Returns:
+            Sample rows
+        """
+        query = f"SELECT * FROM {table_name} LIMIT {limit}"
+        return self.execute_query(query)
+
     def search_across_tables(
         self, search_term: str, tables: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
@@ -144,7 +163,7 @@ class DuckDBQueryTool:
                 continue
 
             conditions = " OR ".join(
-                [f"{col} LIKE '%{search_term}%'" for col in text_columns]
+                [f"CAST({col} AS VARCHAR) LIKE '%{search_term}%'" for col in text_columns]
             )
 
             query = f"SELECT * FROM {table} WHERE {conditions} LIMIT 100"
@@ -205,7 +224,7 @@ class DuckDBQueryTool:
 
 
 class DataAnalysisTool:
-    """Advanced data analysis tools for pattern detection and insights."""
+    """Generic data analysis tools for pattern detection and insights."""
 
     def __init__(self, duckdb_tool: DuckDBQueryTool):
         self.db = duckdb_tool
@@ -362,13 +381,18 @@ class DataAnalysisTool:
 
 
 class NodeProposalGenerator:
-    """Generate graph node proposals from DuckDB data analysis."""
+    """Generate ontology-compliant graph node proposals from data analysis."""
 
-    def __init__(self, analysis_tool: DataAnalysisTool):
+    def __init__(
+        self,
+        analysis_tool: DataAnalysisTool,
+        ontology: Optional[GraphOntology] = None,
+    ):
         self.analysis = analysis_tool
         self.db = analysis_tool.db
+        self.ontology = ontology
 
-    def propose_nodes_from_entities(
+    def propose_nodes_from_column(
         self,
         table: str,
         entity_column: str,
@@ -376,18 +400,28 @@ class NodeProposalGenerator:
         property_columns: Optional[List[str]] = None,
         min_confidence: int = 50,
     ) -> List[Dict[str, Any]]:
-        """Generate node proposals from entity data.
+        """Generate node proposals from a column containing entity identifiers.
 
         Args:
             table: Source table
             entity_column: Column containing entity identifiers
-            entity_type: Type of entity (Person, Phone, Location, etc.)
+            entity_type: Type of entity (must be in ontology if ontology is set)
             property_columns: Additional columns to include as properties
             min_confidence: Minimum confidence score (0-100)
 
         Returns:
             List of proposed node additions
         """
+        # Validate entity type against ontology
+        if self.ontology:
+            et = self.ontology.get_entity_type(entity_type)
+            if not et:
+                logger.warning(
+                    f"Entity type '{entity_type}' not found in ontology. "
+                    f"Valid types: {self.ontology.get_valid_entity_types()}"
+                )
+                return []
+
         # Build query to get unique entities with their properties
         select_cols = [entity_column]
         if property_columns:
@@ -421,6 +455,15 @@ class NodeProposalGenerator:
 
             properties["occurrence_count"] = occurrence_count
             properties["source_table"] = table
+            properties["source_column"] = entity_column
+
+            # Validate against ontology if present
+            if self.ontology:
+                is_valid, errors = self.ontology.validate_entity(entity_type, properties)
+                if not is_valid:
+                    logger.warning(f"Validation errors for {entity_type}: {errors}")
+                    # Continue anyway but log the issue
+                    properties["validation_warnings"] = errors
 
             proposals.append(
                 {
@@ -441,6 +484,8 @@ class NodeProposalGenerator:
         from_column: str,
         to_column: str,
         relationship_type: str,
+        source_entity_type: Optional[str] = None,
+        target_entity_type: Optional[str] = None,
         min_co_occurrence: int = 2,
     ) -> List[Dict[str, Any]]:
         """Generate relationship proposals from correlated data.
@@ -449,12 +494,24 @@ class NodeProposalGenerator:
             table: Source table
             from_column: Source entity column
             to_column: Target entity column
-            relationship_type: Type of relationship (CONTACTED, RELATED, etc.)
+            relationship_type: Type of relationship (must be in ontology if ontology is set)
+            source_entity_type: Type of source entity (for ontology validation)
+            target_entity_type: Type of target entity (for ontology validation)
             min_co_occurrence: Minimum co-occurrence count
 
         Returns:
             List of proposed relationship additions
         """
+        # Validate relationship type against ontology
+        if self.ontology and source_entity_type and target_entity_type:
+            is_valid, errors = self.ontology.validate_relationship(
+                relationship_type, source_entity_type, target_entity_type
+            )
+            if not is_valid:
+                logger.warning(
+                    f"Relationship validation errors: {errors}. Proceeding anyway."
+                )
+
         correlations = self.analysis.find_correlations(table, from_column, to_column)
 
         proposals = []
@@ -476,6 +533,8 @@ class NodeProposalGenerator:
                     "properties": {
                         "co_occurrence_count": co_occurrence,
                         "source_table": table,
+                        "from_column": from_column,
+                        "to_column": to_column,
                     },
                     "evidence": f"Found {co_occurrence} co-occurrences in {table} between {from_column} and {to_column}",
                     "confidence": confidence,

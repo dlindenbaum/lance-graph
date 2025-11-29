@@ -1,9 +1,14 @@
-"""Integrated CDR Investigation Agent with DuckDB data source support."""
+"""Generic data investigation agent with ontology-guided discovery.
+
+This agent is completely domain-agnostic and can work with any type of data.
+Entity discovery and graph construction are guided by a configurable ontology.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
@@ -16,7 +21,8 @@ from .duckdb_tools import (
     DuckDBQueryTool,
     NodeProposalGenerator,
 )
-from .tools import CDRAnalysisTool, GraphQueryTool
+from .ontology import GraphOntology, OntologyTemplates
+from .tools import GraphQueryTool
 from .types import (
     AddEdgeChange,
     AddNodeChange,
@@ -32,14 +38,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class IntegratedCDRAgent:
-    """Integrated agent with both graph and DuckDB data source capabilities.
+class DataInvestigationAgent:
+    """Generic agent for investigating any type of data with ontology guidance.
 
-    Combines:
-    - Graph query tools (lance-graph via Cypher)
-    - DuckDB SQL query tools for external data sources
-    - Data analysis and pattern detection
-    - Automatic node proposal generation
+    Works with:
+    - Any DuckDB database (CDR, taxi, financial, etc.)
+    - Any knowledge graph schema
+    - Configurable ontologies for different domains
+    - Multi-model LLM routing
     """
 
     def __init__(
@@ -47,6 +53,8 @@ class IntegratedCDRAgent:
         service: "LanceKnowledgeGraph",
         config: Optional[AgentConfig] = None,
         duckdb_path: Optional[Union[str, Path]] = None,
+        ontology: Optional[GraphOntology] = None,
+        ontology_path: Optional[Union[str, Path]] = None,
     ):
         self.service = service
         self.config = config or AgentConfig.from_env()
@@ -56,9 +64,11 @@ class IntegratedCDRAgent:
         # Set up logging
         logging.basicConfig(level=self.config.log_level)
 
+        # Load ontology
+        self.ontology = self._load_ontology(ontology, ontology_path)
+
         # Initialize graph tools
         self.graph_tool = GraphQueryTool(service)
-        self.cdr_tool = CDRAnalysisTool(self.graph_tool)
 
         # Initialize DuckDB tools if path provided
         self.duckdb_tool: Optional[DuckDBQueryTool] = None
@@ -71,17 +81,63 @@ class IntegratedCDRAgent:
         # Initialize LiteLLM Router
         self._setup_router()
 
+    def _load_ontology(
+        self,
+        ontology: Optional[GraphOntology],
+        ontology_path: Optional[Union[str, Path]],
+    ) -> GraphOntology:
+        """Load ontology from various sources."""
+        # 1. Use provided ontology object
+        if ontology:
+            logger.info(f"Using provided ontology: {ontology.name}")
+            return ontology
+
+        # 2. Load from path
+        if ontology_path:
+            path = Path(ontology_path)
+            if path.exists():
+                logger.info(f"Loading ontology from: {ontology_path}")
+                return GraphOntology.from_yaml(str(ontology_path))
+
+        # 3. Try environment variable
+        env_path = os.getenv("ONTOLOGY_PATH")
+        if env_path and Path(env_path).exists():
+            logger.info(f"Loading ontology from ONTOLOGY_PATH: {env_path}")
+            return GraphOntology.from_yaml(env_path)
+
+        # 4. Try to infer from domain hint
+        domain = os.getenv("ONTOLOGY_DOMAIN", "generic").lower()
+        logger.info(f"Using {domain} ontology template")
+
+        if domain == "telecommunications":
+            return OntologyTemplates.telecommunications()
+        elif domain == "transportation":
+            return OntologyTemplates.transportation()
+        elif domain == "financial":
+            return OntologyTemplates.financial()
+        else:
+            return OntologyTemplates.generic()
+
     def _setup_duckdb_tools(self, duckdb_path: Union[str, Path]) -> None:
         """Set up DuckDB tools for data analysis."""
         try:
             self.duckdb_tool = DuckDBQueryTool(duckdb_path, read_only=True)
             self.analysis_tool = DataAnalysisTool(self.duckdb_tool)
-            self.proposal_generator = NodeProposalGenerator(self.analysis_tool)
+            self.proposal_generator = NodeProposalGenerator(
+                self.analysis_tool, ontology=self.ontology
+            )
             logger.info(f"Connected to DuckDB database: {duckdb_path}")
 
             # Log available tables
             tables = self.duckdb_tool.get_tables()
             logger.info(f"Available tables: {tables}")
+
+            # Log sample data for schema understanding
+            for table in tables[:3]:  # First 3 tables
+                sample = self.duckdb_tool.get_sample_data(table, limit=2)
+                if sample:
+                    logger.debug(f"Sample from {table}: {sample[0] if sample else 'empty'}")
+
         except Exception as e:
             logger.error(f"Failed to initialize DuckDB tools: {e}")
             self.duckdb_tool = None
@@ -127,53 +183,86 @@ class IntegratedCDRAgent:
             self.fallback_model = "gpt-4o-mini"
 
     def _get_system_prompt(self) -> str:
-        """Get the comprehensive system prompt for the agent."""
+        """Get the generic system prompt for any domain."""
+        graph_schema = self.graph_tool.get_schema()
+
+        # Build ontology description
+        ontology_desc = f"""
+=== ONTOLOGY: {self.ontology.name} ===
+{self.ontology.description or 'Domain-specific ontology'}
+
+Valid Entity Types:
+{chr(10).join(f"- {et.name}: {et.description}" for et in self.ontology.entity_types)}
+
+Valid Relationship Types:
+{chr(10).join(f"- {rt.name}: {rt.source_entity_types} → {rt.target_entity_types}" for rt in self.ontology.relationship_types)}
+
+IMPORTANT: All proposed nodes and relationships MUST conform to this ontology.
+Only use entity types and relationships defined above.
+"""
+
         duckdb_section = ""
         if self.duckdb_tool:
             tables = self.duckdb_tool.get_tables()
+            tables_info = []
+            for table in tables[:5]:  # Show first 5 tables
+                schema = self.duckdb_tool.get_schema(table)
+                cols = [f"{s['column_name']} ({s['data_type']})" for s in schema[:5]]
+                tables_info.append(f"  {table}: {', '.join(cols)}")
+
             duckdb_section = f"""
-DuckDB Data Sources:
-You have access to external data in DuckDB tables: {', '.join(tables)}
+=== EXTERNAL DATA SOURCES ===
+Available Tables: {', '.join(tables)}
 
-DuckDB Tools Available:
-- sql_query(query): Execute SQL queries on DuckDB tables
-- search_data(term, tables): Search for a term across tables
-- analyze_patterns(table, column): Find frequent patterns in data
-- find_correlations(table, col1, col2): Find correlations between columns
-- temporal_analysis(table, timestamp_col): Analyze time-based patterns
-- detect_anomalies(table, column): Find statistical anomalies
-- propose_nodes_from_table(table, entity_col, entity_type, properties): Generate node proposals
-- propose_relationships(table, from_col, to_col, rel_type): Generate relationship proposals
+Schema Summary:
+{chr(10).join(tables_info)}
 
-Use these tools to discover new entities and relationships from external data sources.
+You can query these tables with SQL to discover entities and relationships.
 """
 
-        return f"""You are a CDR (Call Data Record) investigation agent with access to both a knowledge graph and external data sources.
+        return f"""You are a data investigation agent that builds knowledge graphs from various data sources.
 
 Your role is to:
-1. Query and analyze existing graph data using Cypher
-2. Search and analyze external data sources using SQL (DuckDB)
-3. Find patterns, correlations, and anomalies in the data
-4. Propose new nodes and relationships to add to the knowledge graph
-5. Provide evidence and confidence scores for all proposals
+1. Explore and analyze data in external databases (DuckDB)
+2. Query existing graph data (Cypher)
+3. Discover entities and relationships following a strict ontology
+4. Propose new nodes and edges that conform to the ontology
+5. Provide evidence and confidence scores
 
-Graph Tools Available:
-- query_graph(query): Execute Cypher queries on the knowledge graph
-- search_nodes(label, **filters): Search for nodes
-- analyze_call_frequency(phone): Analyze CDR call patterns
-- find_co_located_contacts(phone): Find contacts at same locations
-- get_phone_owner(phone): Look up phone owner
+{ontology_desc}
+
+=== KNOWLEDGE GRAPH ===
+Current Graph Schema:
+- Nodes: {', '.join(graph_schema.get('nodes', []))}
+- Relationships: {', '.join(graph_schema.get('relationships', []))}
+
+Graph Tools:
+- query_graph(query: str): Execute Cypher queries
+- search_nodes(label: str, **filters): Search for existing nodes
 
 {duckdb_section}
 
-When analyzing data and proposing changes:
-1. Start by querying external data sources to discover new entities
-2. Analyze patterns and correlations in the data
-3. Cross-reference with existing graph data to avoid duplicates
-4. Propose nodes with detailed properties extracted from the data
-5. Propose relationships based on co-occurrence and correlation analysis
-6. Always provide evidence and confidence scores (0-100)
+=== DATA SOURCE TOOLS ===
+Available Tools:
+1. sql_query(query: str) - Execute SQL on external data
+2. search_data(term: str, tables: list) - Search across tables
+3. analyze_patterns(table: str, column: str) - Find frequent values
+4. find_correlations(table: str, col1: str, col2: str) - Find correlations
+5. temporal_analysis(table: str, timestamp_col: str) - Time patterns
+6. detect_anomalies(table: str, column: str) - Statistical outliers
+7. propose_nodes(table: str, entity_col: str, type: str, props: list) - Generate nodes
+8. propose_relationships(table: str, from: str, to: str, type: str) - Generate edges
 
+=== WORKFLOW ===
+1. Start by exploring external data sources with SQL
+2. Analyze patterns, correlations, and anomalies
+3. Map discovered data to ontology entity types
+4. Cross-reference with existing graph to avoid duplicates
+5. Propose new nodes with detailed properties
+6. Propose relationships based on correlations
+7. ALWAYS validate against the ontology
+
+=== RESPONSE FORMAT ===
 Structure your response as JSON:
 {{
     "message": "Your analysis and findings",
@@ -182,62 +271,43 @@ Structure your response as JSON:
         "changes": [
             {{
                 "type": "add_node",
-                "entity": "Phone",
-                "label": "555-1234",
-                "properties": {{"carrier": "Verizon", "calls": 47}},
+                "entity": "<EntityType from ontology>",
+                "label": "<unique identifier>",
+                "properties": {{"key": "value"}},
                 "confidence": 85,
-                "evidence": "Found 47 call records in cdr_data table"
+                "evidence": "Detailed evidence from data"
             }}
         ]
     }}
 }}
 
-Be specific, provide detailed evidence from the data, and assign confidence scores based on data quality and frequency."""
+Be specific, provide evidence, and ONLY use entity/relationship types from the ontology."""
 
     def _get_tool_descriptions(self) -> str:
         """Create descriptions of available tools."""
-        graph_schema = self.graph_tool.get_schema()
-
         desc = f"""
-=== KNOWLEDGE GRAPH TOOLS ===
-Current Graph Schema:
-- Nodes: {', '.join(graph_schema.get('nodes', []))}
-- Relationships: {', '.join(graph_schema.get('relationships', []))}
+=== AVAILABLE TOOLS ===
 
-Available Graph Tools:
-1. query_graph(query: str) - Execute Cypher queries
-2. search_nodes(label: str, **filters) - Search for nodes
-3. analyze_call_frequency(phone: str) - Analyze call patterns
-4. find_co_located_contacts(phone: str) - Find contacts at same location
-5. get_phone_owner(phone: str) - Look up phone owner
+Graph Tools (Cypher):
+1. query_graph(query) - Execute Cypher on knowledge graph
+2. search_nodes(label, **filters) - Find existing nodes
 """
 
         if self.duckdb_tool:
-            tables = self.duckdb_tool.get_tables()
-            desc += f"""
-=== DUCKDB DATA SOURCE TOOLS ===
-Available Tables: {', '.join(tables)}
-
-Table Schemas:
-"""
-            for table in tables[:5]:  # Show first 5 tables
-                schema = self.duckdb_tool.get_schema(table)
-                cols = [f"{s['column_name']} ({s['data_type']})" for s in schema[:5]]
-                desc += f"\n{table}: {', '.join(cols)}"
-
             desc += """
+Data Analysis Tools (SQL):
+3. sql_query(query) - Execute SQL queries
+4. search_data(term, tables) - Search across all tables
+5. analyze_patterns(table, column, min_freq) - Find frequent values
+6. find_correlations(table, col1, col2) - Detect correlations
+7. temporal_analysis(table, timestamp_col, interval) - Time-based patterns
+8. detect_anomalies(table, column, threshold) - Statistical outliers
 
-Available DuckDB Tools:
-1. sql_query(query: str) - Execute SQL on DuckDB tables
-2. search_data(term: str, tables: list) - Search across tables
-3. analyze_patterns(table: str, column: str, min_freq: int) - Find frequent values
-4. find_correlations(table: str, col1: str, col2: str) - Find correlations
-5. temporal_analysis(table: str, timestamp_col: str) - Time-based patterns
-6. detect_anomalies(table: str, column: str) - Find outliers
-7. propose_nodes(table: str, entity_col: str, type: str, props: list) - Generate nodes
-8. propose_relationships(table: str, from: str, to: str, type: str) - Generate edges
+Proposal Generation:
+9. propose_nodes(table, entity_col, type, props) - Generate node proposals
+10. propose_relationships(table, from_col, to_col, type, source_type, target_type) - Generate edge proposals
 
-Use SQL tools to discover new entities, then propose them as graph nodes.
+Use these tools to discover entities in the data and propose ontology-compliant additions to the graph.
 """
 
         return desc
@@ -251,16 +321,6 @@ Use SQL tools to discover new entities, then propose them as graph nodes.
             elif tool_name == "search_nodes":
                 label = kwargs.pop("label", "")
                 return self.graph_tool.search_nodes(label, **kwargs)
-            elif tool_name == "analyze_call_frequency":
-                return self.cdr_tool.analyze_call_frequency(
-                    kwargs.get("phone_number", "")
-                )
-            elif tool_name == "find_co_located_contacts":
-                return self.cdr_tool.find_co_located_contacts(
-                    kwargs.get("phone_number", "")
-                )
-            elif tool_name == "get_phone_owner":
-                return self.cdr_tool.get_phone_owner(kwargs.get("phone_number", ""))
 
             # DuckDB tools
             elif tool_name == "sql_query" and self.duckdb_tool:
@@ -294,7 +354,7 @@ Use SQL tools to discover new entities, then propose them as graph nodes.
                     kwargs.get("threshold", 3.0),
                 )
             elif tool_name == "propose_nodes" and self.proposal_generator:
-                return self.proposal_generator.propose_nodes_from_entities(
+                return self.proposal_generator.propose_nodes_from_column(
                     kwargs.get("table", ""),
                     kwargs.get("entity_col", ""),
                     kwargs.get("type", "Entity"),
@@ -306,6 +366,8 @@ Use SQL tools to discover new entities, then propose them as graph nodes.
                     kwargs.get("from_col", ""),
                     kwargs.get("to_col", ""),
                     kwargs.get("rel_type", "RELATED"),
+                    kwargs.get("source_type"),
+                    kwargs.get("target_type"),
                 )
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
@@ -463,7 +525,7 @@ Use SQL tools to discover new entities, then propose them as graph nodes.
         self.iteration_count = 0
 
     def get_router_stats(self) -> Dict[str, Any]:
-        """Get router statistics if available."""
+        """Get router and system statistics."""
         stats = {}
 
         if self.router:
@@ -483,9 +545,19 @@ Use SQL tools to discover new entities, then propose them as graph nodes.
         else:
             stats["duckdb"] = {"connected": False}
 
+        stats["ontology"] = {
+            "name": self.ontology.name,
+            "entity_types": [et.name for et in self.ontology.entity_types],
+            "relationship_types": [rt.name for rt in self.ontology.relationship_types],
+        }
+
         return stats
 
     def close(self) -> None:
         """Close all connections."""
         if self.duckdb_tool:
             self.duckdb_tool.close()
+
+
+# Backwards compatibility alias
+IntegratedCDRAgent = DataInvestigationAgent
