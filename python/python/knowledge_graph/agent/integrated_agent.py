@@ -326,10 +326,34 @@ Structure your response as JSON:
                 "properties": {{"key": "value"}},
                 "confidence": 85,
                 "evidence": "Detailed evidence from data"
+            }},
+            {{
+                "type": "merge_nodes",
+                "entity": "Person",
+                "primaryLabel": "John Smith",
+                "secondaryLabel": "J. Smith",
+                "primaryProperties": {{"name": "John Smith", "phone": "555-1234"}},
+                "secondaryProperties": {{"name": "J. Smith", "email": "john@example.com"}},
+                "mergedProperties": {{"name": ["John Smith", "J. Smith"], "phone": "555-1234", "email": "john@example.com"}},
+                "matchConfidence": 0.92,
+                "matchedRules": ["name,address (normalized)", "phone (normalized)"],
+                "evidence": "Matched on name+address with 92% confidence",
+                "requiresReview": true
+            }},
+            {{
+                "type": "add_edge",
+                "from": "John Smith",
+                "to": "Jane Doe",
+                "relationship": "KNOWS",
+                "properties": {{"since": "2023-01-01"}},
+                "evidence": "Co-occurred in 15 records"
             }}
         ]
     }}
 }}
+
+IMPORTANT: When proposing nodes, check if similar entities already exist in the graph.
+If a match is found, propose a merge_nodes instead of add_node to enrich the existing entity.
 
 Be specific, provide evidence, and ONLY use entity/relationship types from the ontology."""
 

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Change, CHANGE_TYPE_CONFIG, getConfidenceColor } from '../../types/graph';
 import { EvidencePanel } from './EvidencePanel';
 import { ChangeEditor } from './ChangeEditor';
@@ -17,6 +17,12 @@ interface ChangeItemProps {
   onAskAgent: (question: string) => void;
 }
 
+interface FullArtifactData {
+  primary_properties: Record<string, any>;
+  secondary_properties: Record<string, any>;
+  merged_properties: Record<string, any>;
+}
+
 export function ChangeItem({
   change,
   proposalStatus,
@@ -31,6 +37,29 @@ export function ChangeItem({
   onAskAgent,
 }: ChangeItemProps) {
   const config = CHANGE_TYPE_CONFIG[change.type];
+
+  // State for artifact expansion
+  const [fullArtifact, setFullArtifact] = useState<FullArtifactData | null>(null);
+  const [isLoadingArtifact, setIsLoadingArtifact] = useState(false);
+  const [artifactError, setArtifactError] = useState<string | null>(null);
+
+  const fetchArtifact = async (artifactId: string) => {
+    setIsLoadingArtifact(true);
+    setArtifactError(null);
+
+    try {
+      const response = await fetch(`/api/agent/artifacts/${artifactId}`);
+      if (!response.ok) {
+        throw new Error('Artifact not found or expired');
+      }
+      const data = await response.json();
+      setFullArtifact(data);
+    } catch (error) {
+      setArtifactError(error instanceof Error ? error.message : 'Failed to load artifact');
+    } finally {
+      setIsLoadingArtifact(false);
+    }
+  };
 
   const renderProperties = (props: Record<string, any>) => {
     return Object.entries(props)
@@ -169,6 +198,14 @@ export function ChangeItem({
 
     if (change.type === 'merge_nodes') {
       const confidenceColor = getConfidenceColor(change.matchConfidence * 100);
+
+      // Use full artifact data if loaded, otherwise use abbreviated data
+      const primaryProps = fullArtifact?.primary_properties || change.primaryProperties;
+      const secondaryProps = fullArtifact?.secondary_properties || change.secondaryProperties;
+      const mergedProps = fullArtifact?.merged_properties || change.mergedProperties;
+      const hasArtifact = !!change.artifactId;
+      const isExpanded = !!fullArtifact;
+
       return (
         <div>
           <div className="flex items-center gap-2 mb-2">
@@ -199,19 +236,35 @@ export function ChangeItem({
             </div>
           )}
 
+          {/* Artifact expand button */}
+          {hasArtifact && !isExpanded && (
+            <div className="mb-2">
+              <button
+                onClick={() => fetchArtifact(change.artifactId!)}
+                disabled={isLoadingArtifact}
+                className="text-xs text-purple-400 hover:text-purple-300 underline disabled:opacity-50"
+              >
+                {isLoadingArtifact ? 'Loading...' : 'View all properties →'}
+              </button>
+              {artifactError && (
+                <span className="ml-2 text-xs text-red-400">{artifactError}</span>
+              )}
+            </div>
+          )}
+
           {/* Three-column view: Primary, Secondary, Merged */}
-          <div className="grid grid-cols-3 gap-2 text-sm border border-dark-border rounded overflow-hidden">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm border border-dark-border rounded overflow-hidden">
             <div className="p-2 bg-blue-950/20 border-r border-dark-border">
               <div className="text-blue-400 font-medium mb-1 text-xs">Primary Node</div>
               <div className="text-text-muted text-xs mb-1">{change.primaryLabel}</div>
-              {Object.entries(change.primaryProperties).slice(0, 5).map(([key, value]) => (
+              {Object.entries(primaryProps).slice(0, isExpanded ? 100 : 5).map(([key, value]) => (
                 <div key={key} className="text-text-muted text-xs truncate">
                   {key}: {value?.toString() || 'null'}
                 </div>
               ))}
-              {Object.keys(change.primaryProperties).length > 5 && (
+              {!isExpanded && Object.keys(primaryProps).length > 5 && (
                 <div className="text-text-muted text-xs italic">
-                  +{Object.keys(change.primaryProperties).length - 5} more...
+                  +{Object.keys(primaryProps).length - 5} more...
                 </div>
               )}
             </div>
@@ -219,14 +272,14 @@ export function ChangeItem({
             <div className="p-2 bg-purple-950/20 border-r border-dark-border">
               <div className="text-purple-400 font-medium mb-1 text-xs">New Data</div>
               <div className="text-text-muted text-xs mb-1">{change.secondaryLabel}</div>
-              {Object.entries(change.secondaryProperties).slice(0, 5).map(([key, value]) => (
+              {Object.entries(secondaryProps).slice(0, isExpanded ? 100 : 5).map(([key, value]) => (
                 <div key={key} className="text-text-muted text-xs truncate">
                   {key}: {value?.toString() || 'null'}
                 </div>
               ))}
-              {Object.keys(change.secondaryProperties).length > 5 && (
+              {!isExpanded && Object.keys(secondaryProps).length > 5 && (
                 <div className="text-text-muted text-xs italic">
-                  +{Object.keys(change.secondaryProperties).length - 5} more...
+                  +{Object.keys(secondaryProps).length - 5} more...
                 </div>
               )}
             </div>
@@ -234,7 +287,7 @@ export function ChangeItem({
             <div className="p-2 bg-green-950/20">
               <div className="text-green-400 font-medium mb-1 text-xs">→ Merged Result</div>
               <div className="text-text-main text-xs mb-1 font-medium">{change.primaryLabel}</div>
-              {Object.entries(change.mergedProperties).slice(0, 5).map(([key, value]) => {
+              {Object.entries(mergedProps).slice(0, isExpanded ? 100 : 5).map(([key, value]) => {
                 const isNew = !(key in change.primaryProperties);
                 const isChanged = !isNew && change.primaryProperties[key] !== value;
                 return (
@@ -246,9 +299,9 @@ export function ChangeItem({
                   </div>
                 );
               })}
-              {Object.keys(change.mergedProperties).length > 5 && (
+              {!isExpanded && Object.keys(mergedProps).length > 5 && (
                 <div className="text-text-muted text-xs italic">
-                  +{Object.keys(change.mergedProperties).length - 5} more...
+                  +{Object.keys(mergedProps).length - 5} more...
                 </div>
               )}
             </div>

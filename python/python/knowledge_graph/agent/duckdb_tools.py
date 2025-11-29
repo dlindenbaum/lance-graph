@@ -468,16 +468,30 @@ class NodeProposalGenerator:
                     # Continue anyway but log the issue
                     properties["validation_warnings"] = errors
 
-            proposals.append(
-                {
-                    "type": "add_node",
-                    "entity": entity_type,
-                    "label": str(row[entity_column]),
-                    "properties": properties,
-                    "confidence": confidence,
-                    "evidence": f"Found {occurrence_count} occurrences in {table}.{entity_column}",
-                }
-            )
+            # Check if this node should be merged with an existing one
+            label = str(row[entity_column])
+            merge_proposal = self.check_for_merges(entity_type, properties, label)
+
+            if merge_proposal:
+                # Found a match - suggest merge instead of adding new node
+                proposals.append(merge_proposal)
+                logger.info(
+                    f"Suggesting merge for {entity_type} '{label}' "
+                    f"with existing '{merge_proposal['primary_label']}' "
+                    f"({merge_proposal['match_confidence']:.2%} confidence)"
+                )
+            else:
+                # No match - propose new node
+                proposals.append(
+                    {
+                        "type": "add_node",
+                        "entity": entity_type,
+                        "label": label,
+                        "properties": properties,
+                        "confidence": confidence,
+                        "evidence": f"Found {occurrence_count} occurrences in {table}.{entity_column}",
+                    }
+                )
 
         return proposals
 

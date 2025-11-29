@@ -93,6 +93,32 @@ class GraphReviewAgentComponent:
                 },
             }
 
+        @self.router.get("/agent/artifacts/{artifact_id}")
+        async def get_artifact(artifact_id: str) -> Dict[str, Any]:
+            """Retrieve artifact data by ID.
+
+            Args:
+                artifact_id: The artifact identifier
+
+            Returns:
+                Full artifact data including all properties
+
+            Raises:
+                404: If artifact not found or expired
+            """
+            from .agent import get_artifact_store
+
+            store = get_artifact_store()
+            data = store.retrieve(artifact_id)
+
+            if not data:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Artifact {artifact_id} not found or expired"
+                )
+
+            return data
+
         @self.router.websocket("/agent/ws")
         async def websocket_agent(websocket: WebSocket):
             """WebSocket endpoint for real-time agent communication."""
