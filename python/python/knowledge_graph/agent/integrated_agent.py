@@ -26,6 +26,7 @@ from .tools import GraphQueryTool
 from .types import (
     AddEdgeChange,
     AddNodeChange,
+    MergeNodesChange,
     ChatResponse,
     Message,
     Proposal,
@@ -270,62 +271,37 @@ Schema Summary:
 You can query these tables with SQL to discover entities and relationships.
 """
 
-        return f"""You are a data investigation agent that builds knowledge graphs from various data sources.
-
-Your role is to:
-1. Explore and analyze data in external databases (DuckDB)
-2. Query existing graph data (Cypher)
-3. Discover entities and relationships following a strict ontology
-4. Propose new nodes and edges that conform to the ontology
-5. Provide evidence and confidence scores
+        return f"""You are an intelligence analysis agent that builds knowledge graphs by discovering entities and relationships in data.
 
 {ontology_desc}
 
-=== KNOWLEDGE GRAPH ===
-Current Graph Schema:
-- Nodes: {', '.join(graph_schema.get('nodes', []))}
-- Relationships: {', '.join(graph_schema.get('relationships', []))}
-
-Graph Tools:
-- query_graph(query: str): Execute Cypher queries
-- search_nodes(label: str, **filters): Search for existing nodes
+=== CURRENT GRAPH ===
+Node Types: {', '.join(graph_schema.get('nodes', [])) or 'Empty graph'}
+Relationships: {', '.join(graph_schema.get('relationships', [])) or 'None yet'}
 
 {duckdb_section}
 
-=== DATA SOURCE TOOLS ===
-Available Tools:
-1. sql_query(query: str) - Execute SQL on external data
-2. search_data(term: str, tables: list) - Search across tables
-3. analyze_patterns(table: str, column: str) - Find frequent values
-4. find_correlations(table: str, col1: str, col2: str) - Find correlations
-5. temporal_analysis(table: str, timestamp_col: str) - Time patterns
-6. detect_anomalies(table: str, column: str) - Statistical outliers
-7. propose_nodes(table: str, entity_col: str, type: str, props: list) - Generate nodes
-8. propose_relationships(table: str, from: str, to: str, type: str) - Generate edges
-
 === WORKFLOW ===
-1. Start by exploring external data sources with SQL
-2. Analyze patterns, correlations, and anomalies
-3. Map discovered data to ontology entity types
-4. Cross-reference with existing graph to avoid duplicates
-5. Propose new nodes with detailed properties
-6. Propose relationships based on correlations
-7. ALWAYS validate against the ontology
+1. Use tools to explore and analyze data sources
+2. Search the graph for existing entities before proposing new ones
+3. Propose merge_nodes when similar entities exist (the propose_nodes tool does this automatically)
+4. Ensure all proposals conform to the ontology
+5. Provide clear evidence and confidence scores
 
 === RESPONSE FORMAT ===
-Structure your response as JSON:
+When you're done with your investigation, respond with JSON:
 {{
-    "message": "Your analysis and findings",
+    "message": "Clear explanation of what you discovered",
     "proposal": {{
-        "summary": "Brief description of what you found",
+        "summary": "Brief summary of proposed changes",
         "changes": [
             {{
                 "type": "add_node",
-                "entity": "<EntityType from ontology>",
-                "label": "<unique identifier>",
-                "properties": {{"key": "value"}},
+                "entity": "Person",
+                "label": "John Smith",
+                "properties": {{"phone": "555-1234"}},
                 "confidence": 85,
-                "evidence": "Detailed evidence from data"
+                "evidence": "Found in call records"
             }},
             {{
                 "type": "merge_nodes",
@@ -336,119 +312,305 @@ Structure your response as JSON:
                 "secondaryProperties": {{"name": "J. Smith", "email": "john@example.com"}},
                 "mergedProperties": {{"name": ["John Smith", "J. Smith"], "phone": "555-1234", "email": "john@example.com"}},
                 "matchConfidence": 0.92,
-                "matchedRules": ["name,address (normalized)", "phone (normalized)"],
-                "evidence": "Matched on name+address with 92% confidence",
+                "matchedRules": ["name+address (normalized)"],
+                "evidence": "Matched with 92% confidence",
                 "requiresReview": true
             }},
             {{
                 "type": "add_edge",
                 "from": "John Smith",
-                "to": "Jane Doe",
-                "relationship": "KNOWS",
-                "properties": {{"since": "2023-01-01"}},
-                "evidence": "Co-occurred in 15 records"
+                "to": "555-1234",
+                "relationship": "USES_PHONE",
+                "properties": {{"first_seen": "2023-01-01"}},
+                "evidence": "15 calls in January 2023"
             }}
         ]
     }}
 }}
 
-IMPORTANT: When proposing nodes, check if similar entities already exist in the graph.
-If a match is found, propose a merge_nodes instead of add_node to enrich the existing entity.
+IMPORTANT:
+- Only use entity/relationship types from the ontology
+- When propose_nodes finds matches, include the merge suggestions it returns
+- Provide clear evidence for all proposed changes"""
 
-Be specific, provide evidence, and ONLY use entity/relationship types from the ontology."""
-
-    def _get_tool_descriptions(self) -> str:
-        """Create descriptions of available tools."""
-        desc = f"""
-=== AVAILABLE TOOLS ===
-
-Graph Tools (Cypher):
-1. query_graph(query) - Execute Cypher on knowledge graph
-2. search_nodes(label, **filters) - Find existing nodes
-"""
+    def _get_tool_schemas(self) -> List[Dict[str, Any]]:
+        """Get tool definitions in OpenAI function calling format."""
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "query_graph",
+                    "description": "Execute a Cypher query on the knowledge graph to find existing nodes and relationships",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Cypher query to execute (e.g., 'MATCH (p:Person) RETURN p LIMIT 10')",
+                            }
+                        },
+                        "required": ["query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_nodes",
+                    "description": "Search for existing nodes in the graph by label and property filters",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "label": {
+                                "type": "string",
+                                "description": "Node label/type to search for (e.g., 'Person', 'Phone')",
+                            },
+                            "filters": {
+                                "type": "object",
+                                "description": "Property filters as key-value pairs (e.g., {'name': 'John'})",
+                                "additionalProperties": True,
+                            },
+                        },
+                        "required": ["label"],
+                    },
+                },
+            },
+        ]
 
         if self.duckdb_tool:
-            desc += """
-Data Analysis Tools (SQL):
-3. sql_query(query) - Execute SQL queries
-4. search_data(term, tables) - Search across all tables
-5. analyze_patterns(table, column, min_freq) - Find frequent values
-6. find_correlations(table, col1, col2) - Detect correlations
-7. temporal_analysis(table, timestamp_col, interval) - Time-based patterns
-8. detect_anomalies(table, column, threshold) - Statistical outliers
+            tools.extend([
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "sql_query",
+                        "description": "Execute a SQL query on the external DuckDB database to analyze data",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "SQL query to execute (e.g., 'SELECT * FROM calls LIMIT 10')",
+                                }
+                            },
+                            "required": ["query"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_data",
+                        "description": "Search for a term across multiple tables in the database",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "term": {
+                                    "type": "string",
+                                    "description": "Search term (phone number, name, etc.)",
+                                },
+                                "tables": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "List of table names to search, or null for all tables",
+                                },
+                            },
+                            "required": ["term"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "analyze_patterns",
+                        "description": "Find frequent values/patterns in a column for entity discovery",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "table": {"type": "string", "description": "Table name"},
+                                "column": {"type": "string", "description": "Column to analyze"},
+                                "min_freq": {
+                                    "type": "integer",
+                                    "description": "Minimum frequency threshold (default: 5)",
+                                    "default": 5,
+                                },
+                            },
+                            "required": ["table", "column"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "propose_nodes",
+                        "description": "Generate node proposals from a database column. Automatically checks for duplicates and suggests merges.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "table": {"type": "string", "description": "Table name"},
+                                "entity_col": {
+                                    "type": "string",
+                                    "description": "Column containing entity identifiers (labels)",
+                                },
+                                "type": {
+                                    "type": "string",
+                                    "description": "Entity type from ontology (e.g., 'Person', 'Phone')",
+                                },
+                                "props": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "Additional columns to include as properties",
+                                },
+                            },
+                            "required": ["table", "entity_col", "type"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "propose_relationships",
+                        "description": "Generate relationship proposals from database correlations",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "table": {"type": "string", "description": "Table name"},
+                                "from_col": {
+                                    "type": "string",
+                                    "description": "Column containing source node labels",
+                                },
+                                "to_col": {
+                                    "type": "string",
+                                    "description": "Column containing target node labels",
+                                },
+                                "rel_type": {
+                                    "type": "string",
+                                    "description": "Relationship type from ontology (e.g., 'CALLED', 'LIVES_AT')",
+                                },
+                                "source_type": {
+                                    "type": "string",
+                                    "description": "Source entity type (e.g., 'Person')",
+                                },
+                                "target_type": {
+                                    "type": "string",
+                                    "description": "Target entity type (e.g., 'Phone')",
+                                },
+                            },
+                            "required": ["table", "from_col", "to_col", "rel_type"],
+                        },
+                    },
+                },
+            ])
 
-Proposal Generation:
-9. propose_nodes(table, entity_col, type, props) - Generate node proposals
-10. propose_relationships(table, from_col, to_col, type, source_type, target_type) - Generate edge proposals
+        return tools
 
-Use these tools to discover entities in the data and propose ontology-compliant additions to the graph.
-"""
+    def _execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+        """Execute a tool and return results.
 
-        return desc
+        Args:
+            tool_name: Name of the tool to execute
+            arguments: Dictionary of arguments from the LLM's tool call
 
-    def _execute_tool(self, tool_name: str, **kwargs: Any) -> Any:
-        """Execute a tool and return results."""
+        Returns:
+            Tool execution result (will be serialized to JSON for LLM)
+        """
         try:
+            logger.info(f"Executing tool: {tool_name} with args: {arguments}")
+
             # Graph tools
             if tool_name == "query_graph":
-                return self.graph_tool.execute(kwargs.get("query", ""))
+                result = self.graph_tool.execute(arguments.get("query", ""))
+                return {"success": True, "result": result}
+
             elif tool_name == "search_nodes":
-                label = kwargs.pop("label", "")
-                return self.graph_tool.search_nodes(label, **kwargs)
+                label = arguments.get("label", "")
+                filters = arguments.get("filters", {})
+                result = self.graph_tool.search_nodes(label, **filters)
+                return {"success": True, "result": result}
 
             # DuckDB tools
             elif tool_name == "sql_query" and self.duckdb_tool:
-                return self.duckdb_tool.execute_query(kwargs.get("query", ""))
+                result = self.duckdb_tool.execute_query(arguments.get("query", ""))
+                return {"success": True, "result": result}
+
             elif tool_name == "search_data" and self.duckdb_tool:
-                return self.duckdb_tool.search_across_tables(
-                    kwargs.get("term", ""), kwargs.get("tables")
+                result = self.duckdb_tool.search_across_tables(
+                    arguments.get("term", ""),
+                    arguments.get("tables")
                 )
+                return {"success": True, "result": result}
+
             elif tool_name == "analyze_patterns" and self.analysis_tool:
-                return self.analysis_tool.find_frequent_patterns(
-                    kwargs.get("table", ""),
-                    kwargs.get("column", ""),
-                    kwargs.get("min_freq", 5),
+                result = self.analysis_tool.find_frequent_patterns(
+                    arguments.get("table", ""),
+                    arguments.get("column", ""),
+                    arguments.get("min_freq", 5),
                 )
-            elif tool_name == "find_correlations" and self.analysis_tool:
-                return self.analysis_tool.find_correlations(
-                    kwargs.get("table", ""),
-                    kwargs.get("col1", ""),
-                    kwargs.get("col2", ""),
-                )
-            elif tool_name == "temporal_analysis" and self.analysis_tool:
-                return self.analysis_tool.temporal_analysis(
-                    kwargs.get("table", ""),
-                    kwargs.get("timestamp_col", ""),
-                    kwargs.get("interval", "day"),
-                )
-            elif tool_name == "detect_anomalies" and self.analysis_tool:
-                return self.analysis_tool.detect_anomalies(
-                    kwargs.get("table", ""),
-                    kwargs.get("column", ""),
-                    kwargs.get("threshold", 3.0),
-                )
+                return {"success": True, "result": result}
+
             elif tool_name == "propose_nodes" and self.proposal_generator:
-                return self.proposal_generator.propose_nodes_from_column(
-                    kwargs.get("table", ""),
-                    kwargs.get("entity_col", ""),
-                    kwargs.get("type", "Entity"),
-                    kwargs.get("props"),
+                result = self.proposal_generator.propose_nodes_from_column(
+                    arguments.get("table", ""),
+                    arguments.get("entity_col", ""),
+                    arguments.get("type", "Entity"),
+                    arguments.get("props"),
                 )
+                return {"success": True, "proposals": result}
+
             elif tool_name == "propose_relationships" and self.proposal_generator:
-                return self.proposal_generator.propose_relationships_from_correlation(
-                    kwargs.get("table", ""),
-                    kwargs.get("from_col", ""),
-                    kwargs.get("to_col", ""),
-                    kwargs.get("rel_type", "RELATED"),
-                    kwargs.get("source_type"),
-                    kwargs.get("target_type"),
+                result = self.proposal_generator.propose_relationships_from_correlation(
+                    arguments.get("table", ""),
+                    arguments.get("from_col", ""),
+                    arguments.get("to_col", ""),
+                    arguments.get("rel_type", "RELATED"),
+                    arguments.get("source_type"),
+                    arguments.get("target_type"),
                 )
+                return {"success": True, "proposals": result}
+
             else:
-                return {"error": f"Unknown tool: {tool_name}"}
+                return {"success": False, "error": f"Unknown tool: {tool_name}"}
 
         except Exception as e:
-            logger.error(f"Tool execution error in {tool_name}: {e}")
-            return {"error": str(e)}
+            logger.error(f"Tool execution error in {tool_name}: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    def _get_response_schema(self) -> Dict[str, Any]:
+        """Get JSON schema for structured output."""
+        return {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Your analysis and findings to show the user"
+                },
+                "proposal": {
+                    "type": "object",
+                    "description": "Optional proposal with graph changes",
+                    "properties": {
+                        "summary": {
+                            "type": "string",
+                            "description": "Brief summary of proposed changes"
+                        },
+                        "changes": {
+                            "type": "array",
+                            "description": "List of proposed changes to the graph",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "type": {
+                                        "type": "string",
+                                        "enum": ["add_node", "add_edge", "merge_nodes"]
+                                    }
+                                },
+                                "required": ["type"]
+                            }
+                        }
+                    },
+                    "required": ["summary", "changes"]
+                }
+            },
+            "required": ["message"]
+        }
 
     async def process_message(
         self,
@@ -456,63 +618,152 @@ Use these tools to discover entities in the data and propose ontology-compliant 
         case_id: Optional[str] = None,
         model_override: Optional[str] = None,
     ) -> ChatResponse:
-        """Process a user message and generate a response with optional proposal."""
+        """Process a user message with native tool calling and structured output."""
         # Add user message to history
         self.conversation_history.append({"role": "user", "content": user_message})
 
-        # Prepare messages for LLM
+        # Prepare messages for LLM (simplified prompt for tool calling)
         messages = [
             {"role": "system", "content": self._get_system_prompt()},
-            {"role": "system", "content": self._get_tool_descriptions()},
         ] + self.conversation_history
 
+        tools = self._get_tool_schemas()
+        max_iterations = 10  # Prevent infinite loops
+        iteration = 0
+
         try:
-            # Use router if available
-            if self.router and not model_override:
-                logger.info(
-                    f"Using router with strategy: {self.config.router.routing_strategy}"
-                )
-                response = await self.router.acompletion(
-                    model=self.config.router.models[0].model_name,
-                    messages=messages,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
-                )
-            else:
-                import litellm
+            import litellm
 
-                model = model_override or getattr(self, "fallback_model", "gpt-4o-mini")
-                logger.info(f"Using fallback model: {model}")
-                response = await litellm.acompletion(
-                    model=model,
-                    messages=messages,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
-                )
-
-            assistant_message = response.choices[0].message.content
-
-            # Log usage stats
-            if hasattr(response, "usage"):
-                logger.info(f"Token usage: {response.usage}")
-
-            # Add to conversation history
-            self.conversation_history.append(
-                {"role": "assistant", "content": assistant_message}
+            model = (
+                model_override or
+                (self.config.router.models[0].model_name if self.router else "gpt-4o-mini")
             )
+            logger.info(f"Using model: {model} with native tool calling")
 
-            # Try to parse proposal
-            proposal = self._try_parse_proposal(assistant_message)
+            # Tool calling loop
+            while iteration < max_iterations:
+                iteration += 1
+                logger.info(f"Tool calling iteration {iteration}")
 
-            # Create response message
-            message = Message(
+                # Make LLM call with tools
+                if self.router and not model_override:
+                    response = await self.router.acompletion(
+                        model=model,
+                        messages=messages,
+                        tools=tools,
+                        temperature=self.config.temperature,
+                        max_tokens=self.config.max_tokens,
+                    )
+                else:
+                    response = await litellm.acompletion(
+                        model=model,
+                        messages=messages,
+                        tools=tools,
+                        temperature=self.config.temperature,
+                        max_tokens=self.config.max_tokens,
+                    )
+
+                assistant_message = response.choices[0].message
+
+                # Log usage
+                if hasattr(response, "usage"):
+                    logger.info(f"Token usage: {response.usage}")
+
+                # Check if LLM wants to call tools
+                if assistant_message.tool_calls:
+                    logger.info(f"LLM requested {len(assistant_message.tool_calls)} tool calls")
+
+                    # Add assistant message with tool calls to history
+                    messages.append({
+                        "role": "assistant",
+                        "content": assistant_message.content,
+                        "tool_calls": assistant_message.tool_calls,
+                    })
+
+                    # Execute each tool call
+                    for tool_call in assistant_message.tool_calls:
+                        tool_name = tool_call.function.name
+
+                        # Parse arguments (comes as JSON string)
+                        try:
+                            arguments = json.loads(tool_call.function.arguments)
+                        except json.JSONDecodeError:
+                            arguments = {}
+                            logger.error(f"Failed to parse tool arguments: {tool_call.function.arguments}")
+
+                        # Execute tool
+                        result = self._execute_tool(tool_name, arguments)
+
+                        # Add tool result to messages
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": tool_name,
+                            "content": json.dumps(result),
+                        })
+
+                    # Continue loop to get next LLM response
+                    continue
+
+                else:
+                    # No more tool calls - this is the final response
+                    logger.info("LLM provided final response without tool calls")
+
+                    # Get final response with structured output
+                    final_content = assistant_message.content or ""
+
+                    # Try to get structured response if model supports it
+                    try:
+                        # Request structured JSON output for final response
+                        final_response = await litellm.acompletion(
+                            model=model,
+                            messages=messages + [{
+                                "role": "assistant",
+                                "content": final_content
+                            }, {
+                                "role": "user",
+                                "content": "Please format your response as JSON with 'message' and optional 'proposal' fields. The proposal should contain 'summary' and 'changes' array."
+                            }],
+                            response_format={"type": "json_object"},
+                            temperature=0.3,  # Lower temperature for structured output
+                            max_tokens=self.config.max_tokens,
+                        )
+
+                        structured_content = final_response.choices[0].message.content
+                        logger.info("Got structured JSON response")
+
+                    except Exception as e:
+                        logger.warning(f"Failed to get structured response, using original: {e}")
+                        structured_content = final_content
+
+                    # Add to conversation history
+                    self.conversation_history.append({
+                        "role": "assistant",
+                        "content": structured_content
+                    })
+
+                    # Parse proposal
+                    proposal = self._try_parse_proposal(structured_content)
+
+                    # Create response message
+                    message = Message(
+                        id=f"msg-{uuid.uuid4()}",
+                        role="agent",
+                        content=self._extract_message_content(structured_content),
+                        timestamp="Just now",
+                    )
+
+                    return ChatResponse(message=message, proposal=proposal)
+
+            # Max iterations reached
+            logger.warning(f"Max iterations ({max_iterations}) reached in tool calling loop")
+            error_message = Message(
                 id=f"msg-{uuid.uuid4()}",
-                role="agent",
-                content=self._extract_message_content(assistant_message),
+                role="system",
+                content="Agent reached maximum tool calling iterations. Please try a simpler query.",
                 timestamp="Just now",
             )
-
-            return ChatResponse(message=message, proposal=proposal)
+            return ChatResponse(message=error_message)
 
         except Exception as e:
             logger.error(f"Error processing message: {e}", exc_info=True)
@@ -582,6 +833,23 @@ Use these tools to discover entities in the data and propose ontology-compliant 
                             relationship=change_data.get("relationship", "RELATED"),
                             properties=change_data.get("properties"),
                             evidence=change_data.get("evidence"),
+                        )
+                    )
+                elif change_type == "merge_nodes":
+                    proposal.changes.append(
+                        MergeNodesChange(
+                            id=change_id,
+                            entity=change_data.get("entity", "Unknown"),
+                            primary_label=change_data.get("primaryLabel", ""),
+                            secondary_label=change_data.get("secondaryLabel", ""),
+                            primary_properties=change_data.get("primaryProperties", {}),
+                            secondary_properties=change_data.get("secondaryProperties", {}),
+                            merged_properties=change_data.get("mergedProperties", {}),
+                            match_confidence=change_data.get("matchConfidence", 0.5),
+                            matched_rules=change_data.get("matchedRules", []),
+                            evidence=change_data.get("evidence"),
+                            requires_review=change_data.get("requiresReview", True),
+                            artifact_id=change_data.get("artifactId"),
                         )
                     )
 
