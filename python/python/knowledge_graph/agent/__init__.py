@@ -7,7 +7,8 @@ from .duckdb_tools import (
     DuckDBQueryTool,
     NodeProposalGenerator,
 )
-from .integrated_agent import IntegratedCDRAgent
+from .integrated_agent import DataInvestigationAgent, IntegratedCDRAgent
+from .ontology import EntityType, GraphOntology, OntologyTemplates, RelationshipType
 from .tools import CDRAnalysisTool, GraphQueryTool
 from .types import (
     AddEdgeChange,
@@ -26,6 +27,7 @@ from .types import (
 __all__ = [
     "CDRInvestigationAgent",
     "IntegratedCDRAgent",
+    "DataInvestigationAgent",
     "AgentConfig",
     "ModelConfig",
     "RouterConfig",
@@ -34,6 +36,10 @@ __all__ = [
     "DuckDBQueryTool",
     "DataAnalysisTool",
     "NodeProposalGenerator",
+    "GraphOntology",
+    "EntityType",
+    "RelationshipType",
+    "OntologyTemplates",
     "Proposal",
     "ProposalStatus",
     "Change",

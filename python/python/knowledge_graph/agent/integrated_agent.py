@@ -86,7 +86,19 @@ class DataInvestigationAgent:
         ontology: Optional[GraphOntology],
         ontology_path: Optional[Union[str, Path]],
     ) -> GraphOntology:
-        """Load ontology from various sources."""
+        """Load ontology from various sources.
+
+        Supports:
+        - Direct ontology object
+        - Path to YAML file
+        - ONTOLOGY_PATH environment variable
+        - ONTOLOGY_DOMAIN environment variable with single or combined domains
+
+        ONTOLOGY_DOMAIN can be:
+        - Single domain: "communication", "location", "temporal", "pattern_of_life"
+        - Combined: "communication,location" (comma-separated)
+        - Legacy: "telecommunications", "transportation", "financial", "generic"
+        """
         # 1. Use provided ontology object
         if ontology:
             logger.info(f"Using provided ontology: {ontology.name}")
@@ -99,24 +111,60 @@ class DataInvestigationAgent:
                 logger.info(f"Loading ontology from: {ontology_path}")
                 return GraphOntology.from_yaml(str(ontology_path))
 
-        # 3. Try environment variable
+        # 3. Try environment variable for path
         env_path = os.getenv("ONTOLOGY_PATH")
         if env_path and Path(env_path).exists():
             logger.info(f"Loading ontology from ONTOLOGY_PATH: {env_path}")
             return GraphOntology.from_yaml(env_path)
 
-        # 4. Try to infer from domain hint
-        domain = os.getenv("ONTOLOGY_DOMAIN", "generic").lower()
-        logger.info(f"Using {domain} ontology template")
+        # 4. Try to infer from domain hint (supports multiple domains)
+        domain_str = os.getenv("ONTOLOGY_DOMAIN", "generic").lower()
+        domains = [d.strip() for d in domain_str.split(",")]
 
-        if domain == "telecommunications":
+        # If multiple domains, combine them
+        if len(domains) > 1:
+            logger.info(f"Combining ontologies: {domains}")
+            ontologies_to_combine = []
+            for domain in domains:
+                ont = self._get_ontology_by_domain(domain)
+                if ont:
+                    ontologies_to_combine.append(ont)
+
+            if ontologies_to_combine:
+                return GraphOntology.combine(*ontologies_to_combine)
+            else:
+                logger.warning(f"No valid domains found in: {domains}. Using generic.")
+                return OntologyTemplates.generic()
+        else:
+            # Single domain
+            domain = domains[0]
+            logger.info(f"Using {domain} ontology template")
+            ont = self._get_ontology_by_domain(domain)
+            return ont if ont else OntologyTemplates.generic()
+
+    def _get_ontology_by_domain(self, domain: str) -> Optional[GraphOntology]:
+        """Get ontology template by domain name."""
+        # Pattern-of-life ontologies
+        if domain == "communication":
+            return OntologyTemplates.communication()
+        elif domain == "location":
+            return OntologyTemplates.location()
+        elif domain == "temporal" or domain == "time":
+            return OntologyTemplates.temporal()
+        elif domain == "pattern_of_life" or domain == "pol":
+            return OntologyTemplates.pattern_of_life()
+        # Legacy ontologies
+        elif domain == "telecommunications":
             return OntologyTemplates.telecommunications()
         elif domain == "transportation":
             return OntologyTemplates.transportation()
         elif domain == "financial":
             return OntologyTemplates.financial()
-        else:
+        elif domain == "generic":
             return OntologyTemplates.generic()
+        else:
+            logger.warning(f"Unknown domain: {domain}")
+            return None
 
     def _setup_duckdb_tools(self, duckdb_path: Union[str, Path]) -> None:
         """Set up DuckDB tools for data analysis."""
