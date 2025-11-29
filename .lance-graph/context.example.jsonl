@@ -1,0 +1,5 @@
+{"content": "When analyzing call data, prioritize privacy and only expose aggregated patterns unless specific entities are requested", "category": "user_preference", "metadata": {"priority": "high"}}
+{"content": "The investigation focuses on pattern-of-life analysis for counterterrorism purposes", "category": "domain_knowledge", "metadata": {"domain": "intelligence"}}
+{"content": "Always check for duplicate entities before proposing new nodes - merge confidence threshold is 0.85", "category": "constraint", "metadata": {"type": "data_quality"}}
+{"content": "Phone numbers in the dataset use E.164 format (+1234567890)", "category": "domain_knowledge", "metadata": {"dataset": "cdr_data"}}
+{"content": "Prefer temporal relationship types over generic RELATED relationships", "category": "user_preference", "metadata": {"type": "ontology"}}

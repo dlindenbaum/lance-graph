@@ -1,0 +1,81 @@
+# LLM Configuration for Graph Review Agent with LiteLLM Router
+# Copy to llm_config.yaml and customize
+
+# Router Configuration
+router:
+  routing_strategy: "usage-based-routing"  # Options: simple-shuffle, least-busy, usage-based-routing, latency-based-routing
+
+  # Model List - LiteLLM will route between these models
+  models:
+    # Primary Model: OpenAI GPT-4o-mini (fast, cost-effective)
+    - model_name: gpt-4o-mini
+      litellm_params:
+        api_key: ${OPENAI_API_KEY}
+        temperature: 0.7
+        max_tokens: 2000
+      model_info:
+        mode: chat
+        supports_function_calling: true
+
+    # Fallback Model 1: Google Gemini Flash (fast, free tier available)
+    - model_name: gemini/gemini-1.5-flash
+      litellm_params:
+        api_key: ${GEMINI_API_KEY}
+        temperature: 0.7
+        max_tokens: 2000
+      model_info:
+        mode: chat
+        supports_function_calling: true
+
+    # Fallback Model 2: Anthropic Claude (high quality)
+    - model_name: claude-3-5-sonnet-20241022
+      litellm_params:
+        api_key: ${ANTHROPIC_API_KEY}
+        temperature: 0.7
+        max_tokens: 2000
+      model_info:
+        mode: chat
+        supports_function_calling: true
+
+  # Fallback Configuration - Chain of fallbacks if primary fails
+  fallbacks:
+    - gpt-4o-mini: [gemini/gemini-1.5-flash]
+    - gemini/gemini-1.5-flash: [claude-3-5-sonnet-20241022]
+
+  # Retry Policy
+  retry_policy:
+    num_retries: 2
+    timeout: 30  # seconds
+    retry_after: 5  # seconds between retries
+
+  cooldown_time: 60  # seconds to wait before retrying failed model
+
+# Agent Configuration
+temperature: 0.7
+max_tokens: 2000
+enable_caching: true
+log_level: INFO  # DEBUG, INFO, WARNING, ERROR
+
+# Alternative: Azure OpenAI Configuration
+# Uncomment and configure if using Azure
+# router:
+#   models:
+#     - model_name: azure/gpt-4o-mini
+#       litellm_params:
+#         api_key: ${AZURE_API_KEY}
+#         api_base: ${AZURE_API_BASE}
+#         api_version: "2024-02-01"
+#         temperature: 0.7
+#         max_tokens: 2000
+
+# Environment Variables Required:
+# - OPENAI_API_KEY (for OpenAI models)
+# - GEMINI_API_KEY (for Google models)
+# - ANTHROPIC_API_KEY (for Anthropic models)
+# - AZURE_API_KEY, AZURE_API_BASE (for Azure OpenAI)
+
+# Optional Environment Variables:
+# - LITELLM_ROUTING_STRATEGY (override routing_strategy)
+# - AGENT_TEMPERATURE (override temperature)
+# - AGENT_MAX_TOKENS (override max_tokens)
+# - AGENT_LOG_LEVEL (override log_level)

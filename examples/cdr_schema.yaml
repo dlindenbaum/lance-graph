@@ -1,0 +1,86 @@
+# Example Graph Schema for CDR Investigation
+
+nodes:
+  Person:
+    primary_key: person_id
+    description: Individual person in the investigation
+    properties:
+      - name: string
+      - phone: string
+      - email: string
+      - address: string
+      - dob: date
+
+  Phone:
+    primary_key: number
+    description: Phone number involved in calls
+    properties:
+      - carrier: string
+      - type: string  # mobile, landline
+      - registered_name: string
+      - status: string  # active, inactive
+
+  Location:
+    primary_key: location_id
+    description: Physical location
+    properties:
+      - address: string
+      - city: string
+      - state: string
+      - zip: string
+      - coordinates: string
+      - type: string  # residence, business, cell_tower
+
+  Account:
+    primary_key: account_id
+    description: Service account
+    properties:
+      - carrier: string
+      - plan_type: string
+      - status: string
+      - created_date: date
+
+relationships:
+  CONTACTED:
+    source: Phone
+    target: Phone
+    description: Phone-to-phone call record
+    properties:
+      - timestamp: datetime
+      - duration: integer  # seconds
+      - direction: string  # incoming, outgoing
+      - call_type: string  # voice, sms
+      - tower_id: string
+
+  OWNED_BY:
+    source: Phone
+    target: Person
+    description: Phone ownership
+    properties:
+      - registered_date: date
+      - verified: boolean
+
+  LOCATED_AT:
+    source: Phone
+    target: Location
+    description: Phone location during call
+    properties:
+      - timestamp: datetime
+      - confidence: float
+      - method: string  # gps, tower, ip
+
+  ACCOUNT_HOLDER:
+    source: Person
+    target: Account
+    description: Account ownership
+    properties:
+      - since: date
+      - role: string  # primary, authorized_user
+
+  ASSOCIATED_WITH:
+    source: Phone
+    target: Account
+    description: Phone-account relationship
+    properties:
+      - added_date: date
+      - status: string  # active, suspended
