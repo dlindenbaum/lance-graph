@@ -23,11 +23,35 @@ class GraphQueryTool:
             return [{"error": str(e)}]
 
     def get_schema(self) -> Dict[str, Any]:
-        """Get the current graph schema."""
-        return {
-            "nodes": list(self.service.config.node_labels.keys()),
-            "relationships": list(self.service.config.relationships.keys()),
-        }
+        """Get the current graph schema by querying available datasets."""
+        try:
+            # Get all available dataset names
+            datasets = list(self.service.dataset_names())
+
+            # Heuristic: datasets ending in common relationship suffixes are relationships
+            # Everything else is considered a node type
+            relationship_suffixes = ('_rel', '_edge', '_relationship', 'relationship')
+
+            nodes = []
+            relationships = []
+
+            for dataset in datasets:
+                is_relationship = any(dataset.lower().endswith(suffix) for suffix in relationship_suffixes)
+                if is_relationship:
+                    relationships.append(dataset)
+                else:
+                    nodes.append(dataset)
+
+            return {
+                "nodes": nodes if nodes else ["Entity"],
+                "relationships": relationships if relationships else [],
+            }
+        except Exception:
+            # Fallback to safe defaults if introspection fails
+            return {
+                "nodes": ["Entity"],
+                "relationships": [],
+            }
 
     def search_nodes(self, label: str, **filters: Any) -> List[Dict[str, Any]]:
         """Search for nodes by label and optional property filters."""
