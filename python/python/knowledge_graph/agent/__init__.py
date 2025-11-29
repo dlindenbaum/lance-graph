@@ -1,5 +1,6 @@
 """Graph review agent module."""
 
+from .artifacts import ArtifactStore, get_artifact_store
 from .cdr_agent import CDRInvestigationAgent
 from .config import AgentConfig, ModelConfig, RouterConfig
 from .duckdb_tools import (
@@ -52,6 +53,8 @@ __all__ = [
     "MatchingRule",
     "MatchStrategy",
     "MergeStrategy",
+    "ArtifactStore",
+    "get_artifact_store",
     "Proposal",
     "ProposalStatus",
     "Change",

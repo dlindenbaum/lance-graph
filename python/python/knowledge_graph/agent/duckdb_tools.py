@@ -15,6 +15,7 @@ try:
 except ImportError:
     duckdb = None
 
+from .artifacts import create_merge_artifact
 from .ontology import GraphOntology
 
 logger = logging.getLogger(__name__)
@@ -531,25 +532,57 @@ class NodeProposalGenerator:
 
             if best_match:
                 # Generate merged properties
+                primary_props = best_match.get("properties", {})
+                secondary_props = proposed_properties
                 merged_props = self._merge_properties(
-                    best_match.get("properties", {}),
-                    proposed_properties,
+                    primary_props,
+                    secondary_props,
                     entity_type,
                 )
 
-                return {
+                # Check if we should use artifacts for large property sets
+                artifact_id = create_merge_artifact(
+                    primary_props,
+                    secondary_props,
+                    merged_props,
+                    threshold_kb=5,  # Store as artifact if > 5KB
+                )
+
+                merge_proposal = {
                     "type": "merge_nodes",
                     "entity": entity_type,
                     "primary_label": best_match.get("label", ""),
                     "secondary_label": proposed_label,
-                    "primary_properties": best_match.get("properties", {}),
-                    "secondary_properties": proposed_properties,
-                    "merged_properties": merged_props,
                     "match_confidence": best_confidence,
                     "matched_rules": best_matched_rules,
                     "evidence": f"Matched on: {', '.join(best_matched_rules)} with {best_confidence:.2%} confidence",
                     "requires_review": self._requires_review(entity_type, best_confidence),
                 }
+
+                if artifact_id:
+                    # Use artifact - send only summary with artifact_id
+                    merge_proposal["artifact_id"] = artifact_id
+                    # Send abbreviated versions (first 5 properties)
+                    merge_proposal["primary_properties"] = dict(
+                        list(primary_props.items())[:5]
+                    )
+                    merge_proposal["secondary_properties"] = dict(
+                        list(secondary_props.items())[:5]
+                    )
+                    merge_proposal["merged_properties"] = dict(
+                        list(merged_props.items())[:5]
+                    )
+                    logger.info(
+                        f"Using artifact {artifact_id} for large merge "
+                        f"({len(primary_props)} + {len(secondary_props)} properties)"
+                    )
+                else:
+                    # Small enough - send full data
+                    merge_proposal["primary_properties"] = primary_props
+                    merge_proposal["secondary_properties"] = secondary_props
+                    merge_proposal["merged_properties"] = merged_props
+
+                return merge_proposal
 
             return None
 

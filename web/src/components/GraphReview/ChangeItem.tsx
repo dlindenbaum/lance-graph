@@ -167,6 +167,96 @@ export function ChangeItem({
       );
     }
 
+    if (change.type === 'merge_nodes') {
+      const confidenceColor = getConfidenceColor(change.matchConfidence * 100);
+      return (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="px-2 py-0.5 bg-dark-border/50 text-text-muted text-xs rounded">
+              {change.entity}
+            </span>
+            <span className="font-medium text-text-main">{change.primaryLabel}</span>
+            <span className="text-purple-400 mx-1">⊕</span>
+            <span className="font-medium text-text-muted">{change.secondaryLabel}</span>
+            {change.userModified && (
+              <span className="text-xs text-amber-500">• edited</span>
+            )}
+            {change.requiresReview && (
+              <span className="text-xs text-amber-400 ml-2">⚠ Review Required</span>
+            )}
+            <span
+              className="ml-auto text-sm font-medium"
+              style={{ color: confidenceColor }}
+            >
+              {Math.round(change.matchConfidence * 100)}%
+            </span>
+          </div>
+
+          {/* Matched Rules */}
+          {change.matchedRules && change.matchedRules.length > 0 && (
+            <div className="mb-2 text-xs text-purple-400">
+              Matched on: {change.matchedRules.join(', ')}
+            </div>
+          )}
+
+          {/* Three-column view: Primary, Secondary, Merged */}
+          <div className="grid grid-cols-3 gap-2 text-sm border border-dark-border rounded overflow-hidden">
+            <div className="p-2 bg-blue-950/20 border-r border-dark-border">
+              <div className="text-blue-400 font-medium mb-1 text-xs">Primary Node</div>
+              <div className="text-text-muted text-xs mb-1">{change.primaryLabel}</div>
+              {Object.entries(change.primaryProperties).slice(0, 5).map(([key, value]) => (
+                <div key={key} className="text-text-muted text-xs truncate">
+                  {key}: {value?.toString() || 'null'}
+                </div>
+              ))}
+              {Object.keys(change.primaryProperties).length > 5 && (
+                <div className="text-text-muted text-xs italic">
+                  +{Object.keys(change.primaryProperties).length - 5} more...
+                </div>
+              )}
+            </div>
+
+            <div className="p-2 bg-purple-950/20 border-r border-dark-border">
+              <div className="text-purple-400 font-medium mb-1 text-xs">New Data</div>
+              <div className="text-text-muted text-xs mb-1">{change.secondaryLabel}</div>
+              {Object.entries(change.secondaryProperties).slice(0, 5).map(([key, value]) => (
+                <div key={key} className="text-text-muted text-xs truncate">
+                  {key}: {value?.toString() || 'null'}
+                </div>
+              ))}
+              {Object.keys(change.secondaryProperties).length > 5 && (
+                <div className="text-text-muted text-xs italic">
+                  +{Object.keys(change.secondaryProperties).length - 5} more...
+                </div>
+              )}
+            </div>
+
+            <div className="p-2 bg-green-950/20">
+              <div className="text-green-400 font-medium mb-1 text-xs">→ Merged Result</div>
+              <div className="text-text-main text-xs mb-1 font-medium">{change.primaryLabel}</div>
+              {Object.entries(change.mergedProperties).slice(0, 5).map(([key, value]) => {
+                const isNew = !(key in change.primaryProperties);
+                const isChanged = !isNew && change.primaryProperties[key] !== value;
+                return (
+                  <div
+                    key={key}
+                    className={`text-xs truncate ${isNew || isChanged ? 'text-green-400' : 'text-text-muted'}`}
+                  >
+                    {key}: {Array.isArray(value) ? `[${value.join(', ')}]` : value?.toString() || 'null'}
+                  </div>
+                );
+              })}
+              {Object.keys(change.mergedProperties).length > 5 && (
+                <div className="text-text-muted text-xs italic">
+                  +{Object.keys(change.mergedProperties).length - 5} more...
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return null;
   };
 
@@ -211,7 +301,7 @@ export function ChangeItem({
 
         {!isEditing && proposalStatus === 'pending' && (
           <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
-            {(change.type === 'add_node' || change.type === 'add_edge' || change.type === 'modify_node') && (
+            {(change.type === 'add_node' || change.type === 'add_edge' || change.type === 'modify_node' || change.type === 'merge_nodes') && (
               <button
                 onClick={() => {
                   if (change.type === 'add_node') {
@@ -220,6 +310,8 @@ export function ChangeItem({
                     onStartEdit({ properties: change.properties || {} });
                   } else if (change.type === 'modify_node') {
                     onStartEdit({ after: change.after });
+                  } else if (change.type === 'merge_nodes') {
+                    onStartEdit({ mergedProperties: change.mergedProperties });
                   }
                 }}
                 className="p-1.5 hover:bg-dark-border rounded text-text-muted hover:text-text-main"
@@ -238,7 +330,12 @@ export function ChangeItem({
               </button>
             )}
             <button
-              onClick={() => onAskAgent(`Tell me more about the evidence for ${(change as any).label || 'this change'}`)}
+              onClick={() => {
+                const label = change.type === 'merge_nodes'
+                  ? `merging ${(change as any).primaryLabel} and ${(change as any).secondaryLabel}`
+                  : (change as any).label || 'this change';
+                onAskAgent(`Tell me more about the evidence for ${label}`);
+              }}
               className="p-1.5 hover:bg-dark-border rounded text-text-muted hover:text-text-main"
               title="Ask Agent"
             >

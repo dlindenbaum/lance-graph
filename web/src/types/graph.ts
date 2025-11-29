@@ -9,7 +9,7 @@ export interface Proposal {
   changes: Change[];
 }
 
-export type Change = AddNode | AddEdge | ModifyNode | DeleteNode | DeleteEdge;
+export type Change = AddNode | AddEdge | ModifyNode | DeleteNode | DeleteEdge | MergeNodes;
 
 export interface BaseChange {
   id: string;
@@ -59,6 +59,22 @@ export interface DeleteEdge extends BaseChange {
   reason?: string;
 }
 
+export interface MergeNodes extends BaseChange {
+  type: 'merge_nodes';
+  entity: string;
+  primaryLabel: string;
+  secondaryLabel: string;
+  primaryProperties: Record<string, any>;
+  secondaryProperties: Record<string, any>;
+  mergedProperties: Record<string, any>;
+  matchConfidence: number;
+  matchedRules: string[];
+  evidence?: string;
+  requiresReview: boolean;
+  // Optional artifact ID for large property sets
+  artifactId?: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'agent' | 'system';
@@ -78,6 +94,7 @@ export const CHANGE_TYPE_CONFIG: Record<string, ChangeTypeConfig> = {
   modify_node: { icon: '◐', color: '#f59e0b', label: 'Update' },
   delete_node: { icon: '○', color: '#ef4444', label: 'Remove' },
   delete_edge: { icon: '╳', color: '#ef4444', label: 'Unlink' },
+  merge_nodes: { icon: '⊕', color: '#8b5cf6', label: 'Merge' },
 };
 
 export function getConfidenceColor(confidence: number): string {
