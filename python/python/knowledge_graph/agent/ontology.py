@@ -2,9 +2,51 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
 from pydantic import BaseModel, Field
+
+
+class MatchStrategy(str, Enum):
+    """Strategy for matching entities."""
+
+    EXACT = "exact"  # Exact match required
+    FUZZY = "fuzzy"  # Fuzzy string matching
+    NORMALIZED = "normalized"  # Normalized comparison (lowercase, strip spaces)
+    SEMANTIC = "semantic"  # Semantic similarity
+
+
+class MatchingRule(BaseModel):
+    """Rule for matching entities of the same type."""
+
+    properties: List[str] = Field(..., description="Properties to match on")
+    strategy: MatchStrategy = Field(
+        default=MatchStrategy.NORMALIZED, description="Matching strategy"
+    )
+    confidence_threshold: float = Field(
+        default=0.8,
+        description="Minimum confidence for a match (0.0-1.0)",
+        ge=0.0,
+        le=1.0,
+    )
+    weight: float = Field(
+        default=1.0, description="Weight of this rule in overall matching", ge=0.0
+    )
+
+
+class MergeStrategy(BaseModel):
+    """Strategy for merging matched entities."""
+
+    prefer_higher_confidence: bool = Field(
+        default=True, description="Prefer properties from higher confidence source"
+    )
+    combine_properties: bool = Field(
+        default=True, description="Combine properties from both entities"
+    )
+    require_manual_review: bool = Field(
+        default=True, description="Require manual review before merging"
+    )
 
 
 class EntityType(BaseModel):
@@ -23,6 +65,12 @@ class EntityType(BaseModel):
     )
     identifier_properties: List[str] = Field(
         default_factory=list, description="Properties that uniquely identify this entity"
+    )
+    matching_rules: List[MatchingRule] = Field(
+        default_factory=list, description="Rules for matching entities of this type"
+    )
+    merge_strategy: Optional[MergeStrategy] = Field(
+        None, description="Strategy for merging matched entities"
     )
 
 
@@ -225,6 +273,116 @@ class GraphOntology(BaseModel):
             entity_types=list(entity_types_dict.values()),
             relationship_types=list(relationship_types_dict.values()),
         )
+
+    def match_entities(
+        self,
+        entity_type: str,
+        entity1_props: Dict[str, Any],
+        entity2_props: Dict[str, Any],
+    ) -> tuple[bool, float, List[str]]:
+        """Check if two entities match based on ontology rules.
+
+        Args:
+            entity_type: Type of entities to match
+            entity1_props: Properties of first entity
+            entity2_props: Properties of second entity
+
+        Returns:
+            (is_match, confidence, matched_rules)
+        """
+        et = self.get_entity_type(entity_type)
+        if not et or not et.matching_rules:
+            return False, 0.0, []
+
+        total_weight = sum(rule.weight for rule in et.matching_rules)
+        if total_weight == 0:
+            return False, 0.0, []
+
+        matched_rules = []
+        weighted_confidence = 0.0
+
+        for rule in et.matching_rules:
+            match_score = self._evaluate_matching_rule(
+                rule, entity1_props, entity2_props
+            )
+
+            if match_score >= rule.confidence_threshold:
+                matched_rules.append(
+                    f"{','.join(rule.properties)} ({rule.strategy.value})"
+                )
+                weighted_confidence += match_score * rule.weight
+
+        overall_confidence = weighted_confidence / total_weight
+        is_match = len(matched_rules) > 0
+
+        return is_match, overall_confidence, matched_rules
+
+    def _evaluate_matching_rule(
+        self,
+        rule: MatchingRule,
+        props1: Dict[str, Any],
+        props2: Dict[str, Any],
+    ) -> float:
+        """Evaluate a single matching rule.
+
+        Returns:
+            Confidence score (0.0-1.0)
+        """
+        # Check if all properties exist in both entities
+        for prop in rule.properties:
+            if prop not in props1 or prop not in props2:
+                return 0.0
+
+        # Get values to compare
+        values1 = [props1.get(prop) for prop in rule.properties]
+        values2 = [props2.get(prop) for prop in rule.properties]
+
+        # Compare based on strategy
+        if rule.strategy == MatchStrategy.EXACT:
+            matches = sum(1 for v1, v2 in zip(values1, values2) if v1 == v2)
+            return matches / len(values1)
+
+        elif rule.strategy == MatchStrategy.NORMALIZED:
+            matches = 0
+            for v1, v2 in zip(values1, values2):
+                if v1 is None or v2 is None:
+                    continue
+                norm1 = str(v1).lower().strip()
+                norm2 = str(v2).lower().strip()
+                if norm1 == norm2:
+                    matches += 1
+            return matches / len(values1) if values1 else 0.0
+
+        elif rule.strategy == MatchStrategy.FUZZY:
+            # Simple fuzzy matching using string similarity
+            try:
+                from difflib import SequenceMatcher
+
+                total_similarity = 0.0
+                for v1, v2 in zip(values1, values2):
+                    if v1 is None or v2 is None:
+                        continue
+                    s1, s2 = str(v1), str(v2)
+                    similarity = SequenceMatcher(None, s1, s2).ratio()
+                    total_similarity += similarity
+                return total_similarity / len(values1) if values1 else 0.0
+            except Exception:
+                return 0.0
+
+        elif rule.strategy == MatchStrategy.SEMANTIC:
+            # Semantic matching would require embeddings - fallback to fuzzy for now
+            return self._evaluate_matching_rule(
+                MatchingRule(
+                    properties=rule.properties,
+                    strategy=MatchStrategy.FUZZY,
+                    confidence_threshold=rule.confidence_threshold,
+                    weight=rule.weight,
+                ),
+                props1,
+                props2,
+            )
+
+        return 0.0
 
 
 # Predefined ontology templates
@@ -436,6 +594,49 @@ class OntologyTemplates:
                     optional_properties=["email", "phone", "address", "role", "organization"],
                     identifier_properties=["person_id", "ssn", "employee_id"],
                     property_types={"name": "str", "email": "str", "phone": "str"},
+                    matching_rules=[
+                        MatchingRule(
+                            properties=["person_id"],
+                            strategy=MatchStrategy.EXACT,
+                            confidence_threshold=1.0,
+                            weight=10.0,
+                        ),
+                        MatchingRule(
+                            properties=["ssn"],
+                            strategy=MatchStrategy.EXACT,
+                            confidence_threshold=1.0,
+                            weight=10.0,
+                        ),
+                        MatchingRule(
+                            properties=["email"],
+                            strategy=MatchStrategy.NORMALIZED,
+                            confidence_threshold=0.95,
+                            weight=8.0,
+                        ),
+                        MatchingRule(
+                            properties=["phone"],
+                            strategy=MatchStrategy.NORMALIZED,
+                            confidence_threshold=0.95,
+                            weight=8.0,
+                        ),
+                        MatchingRule(
+                            properties=["name"],
+                            strategy=MatchStrategy.FUZZY,
+                            confidence_threshold=0.85,
+                            weight=5.0,
+                        ),
+                        MatchingRule(
+                            properties=["name", "address"],
+                            strategy=MatchStrategy.NORMALIZED,
+                            confidence_threshold=0.9,
+                            weight=7.0,
+                        ),
+                    ],
+                    merge_strategy=MergeStrategy(
+                        prefer_higher_confidence=True,
+                        combine_properties=True,
+                        require_manual_review=True,
+                    ),
                 ),
                 EntityType(
                     name="Phone",
@@ -444,6 +645,31 @@ class OntologyTemplates:
                     optional_properties=["carrier", "type", "device_id", "imei"],
                     identifier_properties=["number", "device_id", "imei"],
                     property_types={"number": "str", "carrier": "str", "type": "str"},
+                    matching_rules=[
+                        MatchingRule(
+                            properties=["number"],
+                            strategy=MatchStrategy.NORMALIZED,
+                            confidence_threshold=0.95,
+                            weight=10.0,
+                        ),
+                        MatchingRule(
+                            properties=["device_id"],
+                            strategy=MatchStrategy.EXACT,
+                            confidence_threshold=1.0,
+                            weight=10.0,
+                        ),
+                        MatchingRule(
+                            properties=["imei"],
+                            strategy=MatchStrategy.EXACT,
+                            confidence_threshold=1.0,
+                            weight=10.0,
+                        ),
+                    ],
+                    merge_strategy=MergeStrategy(
+                        prefer_higher_confidence=True,
+                        combine_properties=True,
+                        require_manual_review=False,
+                    ),
                 ),
                 EntityType(
                     name="EmailAddress",
@@ -532,6 +758,37 @@ class OntologyTemplates:
                     optional_properties=["home_address", "work_address", "vehicle_id"],
                     identifier_properties=["person_id"],
                     property_types={"name": "str"},
+                    matching_rules=[
+                        MatchingRule(
+                            properties=["person_id"],
+                            strategy=MatchStrategy.EXACT,
+                            confidence_threshold=1.0,
+                            weight=10.0,
+                        ),
+                        MatchingRule(
+                            properties=["name", "home_address"],
+                            strategy=MatchStrategy.NORMALIZED,
+                            confidence_threshold=0.9,
+                            weight=9.0,
+                        ),
+                        MatchingRule(
+                            properties=["name", "work_address"],
+                            strategy=MatchStrategy.NORMALIZED,
+                            confidence_threshold=0.9,
+                            weight=9.0,
+                        ),
+                        MatchingRule(
+                            properties=["name"],
+                            strategy=MatchStrategy.FUZZY,
+                            confidence_threshold=0.85,
+                            weight=5.0,
+                        ),
+                    ],
+                    merge_strategy=MergeStrategy(
+                        prefer_higher_confidence=True,
+                        combine_properties=True,
+                        require_manual_review=True,
+                    ),
                 ),
                 EntityType(
                     name="Home",
@@ -540,6 +797,25 @@ class OntologyTemplates:
                     optional_properties=["coordinates", "residence_type", "occupants"],
                     identifier_properties=["location_id", "address"],
                     property_types={"address": "str", "residence_type": "str"},
+                    matching_rules=[
+                        MatchingRule(
+                            properties=["location_id"],
+                            strategy=MatchStrategy.EXACT,
+                            confidence_threshold=1.0,
+                            weight=10.0,
+                        ),
+                        MatchingRule(
+                            properties=["address"],
+                            strategy=MatchStrategy.NORMALIZED,
+                            confidence_threshold=0.9,
+                            weight=9.0,
+                        ),
+                    ],
+                    merge_strategy=MergeStrategy(
+                        prefer_higher_confidence=True,
+                        combine_properties=True,
+                        require_manual_review=False,
+                    ),
                 ),
                 EntityType(
                     name="Work",
@@ -548,6 +824,37 @@ class OntologyTemplates:
                     optional_properties=["coordinates", "business_type", "hours"],
                     identifier_properties=["location_id", "business_id"],
                     property_types={"name": "str", "address": "str"},
+                    matching_rules=[
+                        MatchingRule(
+                            properties=["location_id"],
+                            strategy=MatchStrategy.EXACT,
+                            confidence_threshold=1.0,
+                            weight=10.0,
+                        ),
+                        MatchingRule(
+                            properties=["business_id"],
+                            strategy=MatchStrategy.EXACT,
+                            confidence_threshold=1.0,
+                            weight=10.0,
+                        ),
+                        MatchingRule(
+                            properties=["name", "address"],
+                            strategy=MatchStrategy.NORMALIZED,
+                            confidence_threshold=0.9,
+                            weight=9.0,
+                        ),
+                        MatchingRule(
+                            properties=["address"],
+                            strategy=MatchStrategy.NORMALIZED,
+                            confidence_threshold=0.85,
+                            weight=7.0,
+                        ),
+                    ],
+                    merge_strategy=MergeStrategy(
+                        prefer_higher_confidence=True,
+                        combine_properties=True,
+                        require_manual_review=False,
+                    ),
                 ),
                 EntityType(
                     name="ThirdPlace",

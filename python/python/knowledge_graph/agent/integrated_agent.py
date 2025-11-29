@@ -172,7 +172,9 @@ class DataInvestigationAgent:
             self.duckdb_tool = DuckDBQueryTool(duckdb_path, read_only=True)
             self.analysis_tool = DataAnalysisTool(self.duckdb_tool)
             self.proposal_generator = NodeProposalGenerator(
-                self.analysis_tool, ontology=self.ontology
+                self.analysis_tool,
+                ontology=self.ontology,
+                graph_tool=self.graph_tool,
             )
             logger.info(f"Connected to DuckDB database: {duckdb_path}")
 

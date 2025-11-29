@@ -387,10 +387,12 @@ class NodeProposalGenerator:
         self,
         analysis_tool: DataAnalysisTool,
         ontology: Optional[GraphOntology] = None,
+        graph_tool: Optional[Any] = None,
     ):
         self.analysis = analysis_tool
         self.db = analysis_tool.db
         self.ontology = ontology
+        self.graph_tool = graph_tool
 
     def propose_nodes_from_column(
         self,
@@ -477,6 +479,151 @@ class NodeProposalGenerator:
             )
 
         return proposals
+
+    def check_for_merges(
+        self,
+        entity_type: str,
+        proposed_properties: Dict[str, Any],
+        proposed_label: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Check if a proposed node matches an existing node and should be merged.
+
+        Args:
+            entity_type: Type of entity
+            proposed_properties: Properties of the proposed node
+            proposed_label: Label of the proposed node
+
+        Returns:
+            Merge proposal dict if a match is found, None otherwise
+        """
+        if not self.ontology or not self.graph_tool:
+            return None
+
+        try:
+            # Query existing nodes of this type
+            existing_nodes = self.graph_tool.search_nodes(entity_type)
+
+            if not existing_nodes:
+                return None
+
+            # Check each existing node for matches
+            best_match = None
+            best_confidence = 0.0
+            best_matched_rules = []
+
+            for existing_node in existing_nodes:
+                existing_props = existing_node.get("properties", {})
+                existing_label = existing_node.get("label", "")
+
+                # Skip if it's the exact same label (likely already exists)
+                if existing_label == proposed_label:
+                    continue
+
+                # Use ontology matching rules
+                is_match, confidence, matched_rules = self.ontology.match_entities(
+                    entity_type, existing_props, proposed_properties
+                )
+
+                if is_match and confidence > best_confidence:
+                    best_match = existing_node
+                    best_confidence = confidence
+                    best_matched_rules = matched_rules
+
+            if best_match:
+                # Generate merged properties
+                merged_props = self._merge_properties(
+                    best_match.get("properties", {}),
+                    proposed_properties,
+                    entity_type,
+                )
+
+                return {
+                    "type": "merge_nodes",
+                    "entity": entity_type,
+                    "primary_label": best_match.get("label", ""),
+                    "secondary_label": proposed_label,
+                    "primary_properties": best_match.get("properties", {}),
+                    "secondary_properties": proposed_properties,
+                    "merged_properties": merged_props,
+                    "match_confidence": best_confidence,
+                    "matched_rules": best_matched_rules,
+                    "evidence": f"Matched on: {', '.join(best_matched_rules)} with {best_confidence:.2%} confidence",
+                    "requires_review": self._requires_review(entity_type, best_confidence),
+                }
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error checking for merges: {e}")
+            return None
+
+    def _merge_properties(
+        self,
+        primary: Dict[str, Any],
+        secondary: Dict[str, Any],
+        entity_type: str,
+    ) -> Dict[str, Any]:
+        """Merge properties from two nodes based on merge strategy.
+
+        Args:
+            primary: Properties from primary node
+            secondary: Properties from secondary node
+            entity_type: Type of entity
+
+        Returns:
+            Merged properties dict
+        """
+        merged = dict(primary)  # Start with primary
+
+        if not self.ontology:
+            # No ontology, simple merge
+            for key, value in secondary.items():
+                if key not in merged or merged[key] is None:
+                    merged[key] = value
+            return merged
+
+        # Get merge strategy from ontology
+        et = self.ontology.get_entity_type(entity_type)
+        merge_strategy = et.merge_strategy if et else None
+
+        if not merge_strategy or merge_strategy.combine_properties:
+            # Combine properties
+            for key, value in secondary.items():
+                if key not in merged:
+                    merged[key] = value
+                elif merged[key] is None and value is not None:
+                    merged[key] = value
+                elif merged[key] != value and value is not None:
+                    # Different values - create combined field
+                    if not isinstance(merged.get(key), list):
+                        merged[key] = [merged[key]]
+                    if value not in merged[key]:
+                        merged[key].append(value)
+
+        return merged
+
+    def _requires_review(self, entity_type: str, confidence: float) -> bool:
+        """Determine if a merge requires manual review.
+
+        Args:
+            entity_type: Type of entity
+            confidence: Match confidence
+
+        Returns:
+            Whether manual review is required
+        """
+        if not self.ontology:
+            return True
+
+        et = self.ontology.get_entity_type(entity_type)
+        if not et or not et.merge_strategy:
+            return True
+
+        # High confidence matches may not require review
+        if confidence >= 0.95 and not et.merge_strategy.require_manual_review:
+            return False
+
+        return et.merge_strategy.require_manual_review
 
     def propose_relationships_from_correlation(
         self,

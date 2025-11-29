@@ -16,6 +16,7 @@ class ChangeType(str, Enum):
     MODIFY_NODE = "modify_node"
     DELETE_NODE = "delete_node"
     DELETE_EDGE = "delete_edge"
+    MERGE_NODES = "merge_nodes"
 
 
 class AddNodeChange(BaseModel):
@@ -87,8 +88,47 @@ class DeleteEdgeChange(BaseModel):
         populate_by_name = True
 
 
+class MergeNodesChange(BaseModel):
+    """Represents merging two nodes into one enriched node."""
+
+    id: str
+    type: Literal["merge_nodes"] = "merge_nodes"
+    entity: str = Field(..., description="Node type being merged")
+    primary_label: str = Field(
+        ..., description="Label of the primary node (will be kept)"
+    )
+    secondary_label: str = Field(
+        ..., description="Label of the secondary node (will be merged in)"
+    )
+    primary_properties: Dict[str, Any] = Field(
+        ..., description="Properties from primary node"
+    )
+    secondary_properties: Dict[str, Any] = Field(
+        ..., description="Properties from secondary node"
+    )
+    merged_properties: Dict[str, Any] = Field(
+        ..., description="Combined properties after merge"
+    )
+    match_confidence: float = Field(
+        ..., ge=0.0, le=1.0, description="Confidence that these are the same entity (0-1)"
+    )
+    matched_rules: List[str] = Field(
+        default_factory=list, description="Matching rules that triggered this merge"
+    )
+    evidence: Optional[str] = Field(None, description="Evidence for this merge")
+    requires_review: bool = Field(
+        default=True, description="Whether this merge requires manual review"
+    )
+    user_modified: bool = False
+
+
 Change = Union[
-    AddNodeChange, AddEdgeChange, ModifyNodeChange, DeleteNodeChange, DeleteEdgeChange
+    AddNodeChange,
+    AddEdgeChange,
+    ModifyNodeChange,
+    DeleteNodeChange,
+    DeleteEdgeChange,
+    MergeNodesChange,
 ]
 
 

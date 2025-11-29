@@ -8,7 +8,15 @@ from .duckdb_tools import (
     NodeProposalGenerator,
 )
 from .integrated_agent import DataInvestigationAgent, IntegratedCDRAgent
-from .ontology import EntityType, GraphOntology, OntologyTemplates, RelationshipType
+from .ontology import (
+    EntityType,
+    GraphOntology,
+    MatchingRule,
+    MatchStrategy,
+    MergeStrategy,
+    OntologyTemplates,
+    RelationshipType,
+)
 from .tools import CDRAnalysisTool, GraphQueryTool
 from .types import (
     AddEdgeChange,
@@ -18,6 +26,7 @@ from .types import (
     ChatResponse,
     DeleteEdgeChange,
     DeleteNodeChange,
+    MergeNodesChange,
     Message,
     ModifyNodeChange,
     Proposal,
@@ -40,6 +49,9 @@ __all__ = [
     "EntityType",
     "RelationshipType",
     "OntologyTemplates",
+    "MatchingRule",
+    "MatchStrategy",
+    "MergeStrategy",
     "Proposal",
     "ProposalStatus",
     "Change",
@@ -48,6 +60,7 @@ __all__ = [
     "ModifyNodeChange",
     "DeleteNodeChange",
     "DeleteEdgeChange",
+    "MergeNodesChange",
     "Message",
     "ChatRequest",
     "ChatResponse",
