@@ -27,31 +27,56 @@ impl DataFusionPlanner {
     ) -> Result<LogicalPlan> {
         // Try to use catalog if available
         if let Some(cat) = &self.catalog {
-            // Catalog exists - check if label is registered
-            if let Some(source) = cat.node_source(label) {
+            // Check if we have a node mapping in the config that might specify a source_table
+            let node_mapping = self.config.get_node_mapping(label);
+
+            // Determine the actual source table name to look up in the catalog
+            // If there's a source_table in the mapping, use that; otherwise use the label
+            let source_table_name = node_mapping
+                .and_then(|m| m.source_table.as_ref())
+                .map(|s| s.as_str())
+                .unwrap_or(label);
+
+            // Catalog exists - check if source table is registered
+            if let Some(source) = cat.node_source(source_table_name) {
                 // Get schema before moving source
                 let schema = source.schema();
-                let mut builder = LogicalPlanBuilder::scan(label, source, None).map_err(|e| {
-                    self.plan_error(&format!("Failed to scan node source '{}'", label), e)
-                })?;
+                let mut builder =
+                    LogicalPlanBuilder::scan(source_table_name, source, None).map_err(|e| {
+                        self.plan_error(
+                            &format!("Failed to scan node source '{}'", source_table_name),
+                            e,
+                        )
+                    })?;
 
-                // Combine property filters into single predicate for efficiency
-                if !properties.is_empty() {
-                    let filter_exprs: Vec<Expr> = properties
-                        .iter()
-                        .map(|(k, v)| {
-                            let lit_expr = super::expression::to_df_value_expr(
-                                &crate::ast::ValueExpression::Literal(v.clone()),
-                            );
-                            Expr::BinaryExpr(BinaryExpr {
-                                left: Box::new(col(k)),
-                                op: Operator::Eq,
-                                right: Box::new(lit_expr),
-                            })
-                        })
-                        .collect();
+                // Collect all filter expressions
+                let mut filter_exprs: Vec<Expr> = Vec::new();
 
-                    // Combine with AND if multiple filters
+                // If this is a unified table with a label_field, add a filter for the label
+                if let Some(mapping) = node_mapping {
+                    if let Some(label_field) = &mapping.label_field {
+                        filter_exprs.push(Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(col(label_field.as_str())),
+                            op: Operator::Eq,
+                            right: Box::new(datafusion::logical_expr::lit(label)),
+                        }));
+                    }
+                }
+
+                // Add property filters
+                for (k, v) in properties.iter() {
+                    let lit_expr = super::expression::to_df_value_expr(
+                        &crate::ast::ValueExpression::Literal(v.clone()),
+                    );
+                    filter_exprs.push(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(col(k)),
+                        op: Operator::Eq,
+                        right: Box::new(lit_expr),
+                    }));
+                }
+
+                // Combine all filters with AND if there are any
+                if !filter_exprs.is_empty() {
                     let combined_filter = filter_exprs
                         .into_iter()
                         .reduce(|acc, expr| {
@@ -65,7 +90,7 @@ impl DataFusionPlanner {
 
                     builder = builder
                         .filter(combined_filter)
-                        .map_err(|e| self.plan_error("Failed to apply property filters", e))?;
+                        .map_err(|e| self.plan_error("Failed to apply filters", e))?;
                 }
 
                 // Create qualified column aliases: variable__property
@@ -92,12 +117,12 @@ impl DataFusionPlanner {
                     .build()
                     .map_err(|e| self.plan_error("Failed to build scan plan", e));
             } else {
-                // Catalog exists but label not found - fail fast
+                // Catalog exists but source table not found - fail fast
                 return Err(crate::error::GraphError::ConfigError {
                     message: format!(
-                        "Node label '{}' not found in catalog. \
-                         Ensure the label is registered in your GraphConfig with .with_node_label()",
-                        label
+                        "Node source '{}' not found in catalog. \
+                         Ensure the table is registered. Label '{}' maps to source table '{}'.",
+                        source_table_name, label, source_table_name
                     ),
                     location: snafu::Location::new(file!(), line!(), column!()),
                 });
@@ -187,7 +212,15 @@ impl DataFusionPlanner {
 
         // Get source node label and schema
         if let Some(source_label) = ctx.analysis.var_to_label.get(source_variable) {
-            if let Some(source) = cat.node_source(source_label) {
+            // Check if we have a node mapping that specifies a source_table
+            let source_table_name = self
+                .config
+                .get_node_mapping(source_label)
+                .and_then(|m| m.source_table.as_ref())
+                .map(|s| s.as_str())
+                .unwrap_or(source_label.as_str());
+
+            if let Some(source) = cat.node_source(source_table_name) {
                 let source_schema = source.schema();
                 for field in source_schema.fields() {
                     let qualified_name = format!("{}__{}", source_variable, field.name());
@@ -198,7 +231,15 @@ impl DataFusionPlanner {
 
         // Get target node label and schema
         if let Some(target_label) = ctx.analysis.var_to_label.get(target_variable) {
-            if let Some(target) = cat.node_source(target_label) {
+            // Check if we have a node mapping that specifies a source_table
+            let target_table_name = self
+                .config
+                .get_node_mapping(target_label)
+                .and_then(|m| m.source_table.as_ref())
+                .map(|s| s.as_str())
+                .unwrap_or(target_label.as_str());
+
+            if let Some(target) = cat.node_source(target_table_name) {
                 let target_schema = target.schema();
                 for field in target_schema.fields() {
                     let qualified_name = format!("{}__{}", target_variable, field.name());
@@ -216,22 +257,48 @@ impl DataFusionPlanner {
         catalog: &Arc<dyn GraphSourceCatalog>,
         rel_instance: &RelationshipInstance,
     ) -> Result<LogicalPlan> {
+        // Check if we have a relationship mapping that specifies a source_table
+        let rel_mapping = self.config.get_relationship_mapping(&rel_instance.rel_type);
+
+        // Determine the actual source table name
+        let source_table_name = rel_mapping
+            .and_then(|m| m.source_table.as_ref())
+            .map(|s| s.as_str())
+            .unwrap_or(&rel_instance.rel_type);
+
         let rel_source = catalog
-            .relationship_source(&rel_instance.rel_type)
+            .relationship_source(source_table_name)
             .ok_or_else(|| crate::error::GraphError::ConfigError {
                 message: format!(
-                    "No table source found for relationship: {}",
-                    rel_instance.rel_type
+                    "No table source found for relationship '{}' (source table: '{}')",
+                    rel_instance.rel_type, source_table_name
                 ),
                 location: snafu::Location::new(file!(), line!(), column!()),
             })?;
 
         let rel_schema = rel_source.schema();
-        let rel_builder = LogicalPlanBuilder::scan(&rel_instance.rel_type, rel_source, None)
+        let mut rel_builder = LogicalPlanBuilder::scan(source_table_name, rel_source, None)
             .map_err(|e| crate::error::GraphError::PlanError {
                 message: format!("Failed to scan relationship: {}", e),
                 location: snafu::Location::new(file!(), line!(), column!()),
             })?;
+
+        // If this is a unified table with a type_field, add a filter for the relationship type
+        if let Some(mapping) = rel_mapping {
+            if let Some(type_field) = &mapping.type_field {
+                let filter_expr = Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col(type_field.as_str())),
+                    op: Operator::Eq,
+                    right: Box::new(datafusion::logical_expr::lit(&rel_instance.rel_type)),
+                });
+                rel_builder = rel_builder.filter(filter_expr).map_err(|e| {
+                    crate::error::GraphError::PlanError {
+                        message: format!("Failed to apply relationship type filter: {}", e),
+                        location: snafu::Location::new(file!(), line!(), column!()),
+                    }
+                })?;
+            }
+        }
 
         let rel_qualified_exprs: Vec<Expr> = rel_schema
             .fields()
@@ -263,33 +330,74 @@ impl DataFusionPlanner {
         target_variable: &str,
         target_properties: &HashMap<String, PropertyValue>,
     ) -> Result<LogicalPlan> {
-        let target_source = catalog.node_source(target_label).ok_or_else(|| {
+        // Check if we have a node mapping that specifies a source_table
+        let node_mapping = self.config.get_node_mapping(target_label);
+
+        // Determine the actual source table name
+        let source_table_name = node_mapping
+            .and_then(|m| m.source_table.as_ref())
+            .map(|s| s.as_str())
+            .unwrap_or(target_label);
+
+        let target_source = catalog.node_source(source_table_name).ok_or_else(|| {
             crate::error::GraphError::ConfigError {
-                message: format!("No table source found for node label: {}", target_label),
+                message: format!(
+                    "No table source found for node label '{}' (source table: '{}')",
+                    target_label, source_table_name
+                ),
                 location: snafu::Location::new(file!(), line!(), column!()),
             }
         })?;
 
         let target_schema = target_source.schema();
-        let mut target_builder = LogicalPlanBuilder::scan(target_label, target_source, None)
+        let mut target_builder = LogicalPlanBuilder::scan(source_table_name, target_source, None)
             .map_err(|e| crate::error::GraphError::PlanError {
                 message: format!("Failed to scan target node: {}", e),
                 location: snafu::Location::new(file!(), line!(), column!()),
             })?;
+
+        // Collect all filter expressions
+        let mut filter_exprs: Vec<Expr> = Vec::new();
+
+        // If this is a unified table with a label_field, add a filter for the label
+        if let Some(mapping) = node_mapping {
+            if let Some(label_field) = &mapping.label_field {
+                filter_exprs.push(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col(label_field.as_str())),
+                    op: Operator::Eq,
+                    right: Box::new(datafusion::logical_expr::lit(target_label)),
+                }));
+            }
+        }
 
         // Apply target property filters
         for (k, v) in target_properties.iter() {
             let lit_expr = super::expression::to_df_value_expr(
                 &crate::ast::ValueExpression::Literal(v.clone()),
             );
-            let filter_expr = Expr::BinaryExpr(BinaryExpr {
+            filter_exprs.push(Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(col(k)),
                 op: Operator::Eq,
                 right: Box::new(lit_expr),
-            });
-            target_builder = target_builder.filter(filter_expr).map_err(|e| {
+            }));
+        }
+
+        // Combine all filters with AND if there are any
+        if !filter_exprs.is_empty() {
+            let combined_filter = filter_exprs
+                .into_iter()
+                .reduce(|acc, expr| {
+                    Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(acc),
+                        op: Operator::And,
+                        right: Box::new(expr),
+                    })
+                })
+                .unwrap();
+
+            target_builder = target_builder.filter(combined_filter).map_err(|e| {
                 crate::error::GraphError::PlanError {
-                    message: format!("Failed to apply target property filter: {}", e),
+                    message: format!("Failed to apply target filters: {}", e),
                     location: snafu::Location::new(file!(), line!(), column!()),
                 }
             })?;

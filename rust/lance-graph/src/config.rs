@@ -27,10 +27,15 @@ pub struct NodeMapping {
     pub label: String,
     /// Field name that serves as the node identifier
     pub id_field: String,
+    /// Optional field containing the node type/label (for unified tables)
+    /// When set, scans will filter by this field matching the label
+    pub label_field: Option<String>,
     /// Optional fields that define node properties
     pub property_fields: Vec<String>,
     /// Optional filter conditions for this node type
     pub filter_conditions: Option<String>,
+    /// Optional source table name (for unified tables where multiple labels share one table)
+    pub source_table: Option<String>,
 }
 
 /// Configuration for mapping relationship types to dataset fields
@@ -42,12 +47,15 @@ pub struct RelationshipMapping {
     pub source_id_field: String,
     /// Field containing the target node ID
     pub target_id_field: String,
-    /// Optional field containing the relationship type
+    /// Optional field containing the relationship type (for unified tables)
+    /// When set, scans will filter by this field matching the relationship_type
     pub type_field: Option<String>,
     /// Optional fields that define relationship properties
     pub property_fields: Vec<String>,
     /// Optional filter conditions for this relationship type
     pub filter_conditions: Option<String>,
+    /// Optional source table name (for unified tables where multiple types share one table)
+    pub source_table: Option<String>,
 }
 
 impl Default for GraphConfig {
@@ -128,8 +136,42 @@ impl GraphConfigBuilder {
             NodeMapping {
                 label: label_str,
                 id_field: id_field.into(),
+                label_field: None,
                 property_fields: Vec::new(),
                 filter_conditions: None,
+                source_table: None,
+            },
+        );
+        self
+    }
+
+    /// Add a node label mapping from a unified table with a label field
+    ///
+    /// This allows multiple node labels to be stored in a single table,
+    /// distinguished by a label/type column.
+    ///
+    /// # Arguments
+    /// * `source_table` - The name of the unified table containing all nodes
+    /// * `label` - The node label value to filter by
+    /// * `id_field` - Field name that serves as the node identifier
+    /// * `label_field` - Field name containing the node type/label
+    pub fn with_unified_node<S: Into<String>>(
+        mut self,
+        source_table: S,
+        label: S,
+        id_field: S,
+        label_field: S,
+    ) -> Self {
+        let label_str = label.into();
+        self.node_mappings.insert(
+            label_str.clone(),
+            NodeMapping {
+                label: label_str,
+                id_field: id_field.into(),
+                label_field: Some(label_field.into()),
+                property_fields: Vec::new(),
+                filter_conditions: None,
+                source_table: Some(source_table.into()),
             },
         );
         self
@@ -158,6 +200,42 @@ impl GraphConfigBuilder {
                 type_field: None,
                 property_fields: Vec::new(),
                 filter_conditions: None,
+                source_table: None,
+            },
+        );
+        self
+    }
+
+    /// Add a relationship type mapping from a unified table with a type field
+    ///
+    /// This allows multiple relationship types to be stored in a single table,
+    /// distinguished by a type column.
+    ///
+    /// # Arguments
+    /// * `source_table` - The name of the unified table containing all relationships
+    /// * `rel_type` - The relationship type value to filter by
+    /// * `source_field` - Field containing the source node ID
+    /// * `target_field` - Field containing the target node ID
+    /// * `type_field` - Field name containing the relationship type
+    pub fn with_unified_relationship<S: Into<String>>(
+        mut self,
+        source_table: S,
+        rel_type: S,
+        source_field: S,
+        target_field: S,
+        type_field: S,
+    ) -> Self {
+        let type_str = rel_type.into();
+        self.relationship_mappings.insert(
+            type_str.clone(),
+            RelationshipMapping {
+                relationship_type: type_str,
+                source_id_field: source_field.into(),
+                target_id_field: target_field.into(),
+                type_field: Some(type_field.into()),
+                property_fields: Vec::new(),
+                filter_conditions: None,
+                source_table: Some(source_table.into()),
             },
         );
         self
@@ -206,9 +284,40 @@ impl NodeMapping {
         Self {
             label: label.into(),
             id_field: id_field.into(),
+            label_field: None,
             property_fields: Vec::new(),
             filter_conditions: None,
+            source_table: None,
         }
+    }
+
+    /// Create a new node mapping from a unified table
+    pub fn new_unified<S: Into<String>>(
+        source_table: S,
+        label: S,
+        id_field: S,
+        label_field: S,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            id_field: id_field.into(),
+            label_field: Some(label_field.into()),
+            property_fields: Vec::new(),
+            filter_conditions: None,
+            source_table: Some(source_table.into()),
+        }
+    }
+
+    /// Set the label field for this node type (for unified tables)
+    pub fn with_label_field<S: Into<String>>(mut self, label_field: S) -> Self {
+        self.label_field = Some(label_field.into());
+        self
+    }
+
+    /// Set the source table name (for unified tables)
+    pub fn with_source_table<S: Into<String>>(mut self, source_table: S) -> Self {
+        self.source_table = Some(source_table.into());
+        self
     }
 
     /// Add property fields to the mapping
@@ -234,12 +343,38 @@ impl RelationshipMapping {
             type_field: None,
             property_fields: Vec::new(),
             filter_conditions: None,
+            source_table: None,
+        }
+    }
+
+    /// Create a new relationship mapping from a unified table
+    pub fn new_unified<S: Into<String>>(
+        source_table: S,
+        rel_type: S,
+        source_field: S,
+        target_field: S,
+        type_field: S,
+    ) -> Self {
+        Self {
+            relationship_type: rel_type.into(),
+            source_id_field: source_field.into(),
+            target_id_field: target_field.into(),
+            type_field: Some(type_field.into()),
+            property_fields: Vec::new(),
+            filter_conditions: None,
+            source_table: Some(source_table.into()),
         }
     }
 
     /// Set the type field for this relationship
     pub fn with_type_field<S: Into<String>>(mut self, type_field: S) -> Self {
         self.type_field = Some(type_field.into());
+        self
+    }
+
+    /// Set the source table name (for unified tables)
+    pub fn with_source_table<S: Into<String>>(mut self, source_table: S) -> Self {
+        self.source_table = Some(source_table.into());
         self
     }
 
@@ -288,8 +423,10 @@ mod tests {
             NodeMapping {
                 label: "Person".to_string(),
                 id_field: "".to_string(),
+                label_field: None,
                 property_fields: Vec::new(),
                 filter_conditions: None,
+                source_table: None,
             },
         );
 
@@ -304,5 +441,67 @@ mod tests {
 
         assert_eq!(mapping.property_fields.len(), 2);
         assert!(mapping.filter_conditions.is_some());
+    }
+
+    #[test]
+    fn test_unified_node_mapping() {
+        let config = GraphConfig::builder()
+            .with_unified_node("nodes", "Person", "id", "node_type")
+            .with_unified_node("nodes", "Company", "id", "node_type")
+            .build()
+            .unwrap();
+
+        assert_eq!(config.node_mappings.len(), 2);
+
+        let person_mapping = config.get_node_mapping("Person").unwrap();
+        assert_eq!(person_mapping.id_field, "id");
+        assert_eq!(person_mapping.label_field, Some("node_type".to_string()));
+        assert_eq!(person_mapping.source_table, Some("nodes".to_string()));
+
+        let company_mapping = config.get_node_mapping("Company").unwrap();
+        assert_eq!(company_mapping.source_table, Some("nodes".to_string()));
+    }
+
+    #[test]
+    fn test_unified_relationship_mapping() {
+        let config = GraphConfig::builder()
+            .with_unified_node("nodes", "Person", "id", "node_type")
+            .with_unified_relationship("relationships", "KNOWS", "source_id", "target_id", "rel_type")
+            .with_unified_relationship("relationships", "WORKS_FOR", "source_id", "target_id", "rel_type")
+            .build()
+            .unwrap();
+
+        assert_eq!(config.relationship_mappings.len(), 2);
+
+        let knows_mapping = config.get_relationship_mapping("KNOWS").unwrap();
+        assert_eq!(knows_mapping.source_id_field, "source_id");
+        assert_eq!(knows_mapping.target_id_field, "target_id");
+        assert_eq!(knows_mapping.type_field, Some("rel_type".to_string()));
+        assert_eq!(knows_mapping.source_table, Some("relationships".to_string()));
+    }
+
+    #[test]
+    fn test_node_mapping_new_unified() {
+        let mapping = NodeMapping::new_unified("nodes", "Person", "id", "node_type");
+        assert_eq!(mapping.label, "Person");
+        assert_eq!(mapping.id_field, "id");
+        assert_eq!(mapping.label_field, Some("node_type".to_string()));
+        assert_eq!(mapping.source_table, Some("nodes".to_string()));
+    }
+
+    #[test]
+    fn test_relationship_mapping_new_unified() {
+        let mapping = RelationshipMapping::new_unified(
+            "relationships",
+            "KNOWS",
+            "source_id",
+            "target_id",
+            "rel_type",
+        );
+        assert_eq!(mapping.relationship_type, "KNOWS");
+        assert_eq!(mapping.source_id_field, "source_id");
+        assert_eq!(mapping.target_id_field, "target_id");
+        assert_eq!(mapping.type_field, Some("rel_type".to_string()));
+        assert_eq!(mapping.source_table, Some("relationships".to_string()));
     }
 }

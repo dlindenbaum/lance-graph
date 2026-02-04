@@ -143,6 +143,105 @@ impl GraphConfigBuilder {
         }
     }
 
+    /// Add a node label mapping from a unified table with a label field
+    ///
+    /// This allows multiple node labels to be stored in a single table,
+    /// distinguished by a label/type column. The table filtering is done
+    /// efficiently in Rust/DataFusion rather than Python.
+    ///
+    /// Parameters
+    /// ----------
+    /// source_table : str
+    ///     The name of the unified table containing all nodes
+    /// label : str
+    ///     The node label value to filter by
+    /// id_field : str
+    ///     The field in the dataset that serves as the node ID
+    /// label_field : str
+    ///     The field containing the node type/label
+    ///
+    /// Returns
+    /// -------
+    /// GraphConfigBuilder
+    ///     A new builder with the node mapping applied
+    ///
+    /// Example
+    /// -------
+    /// >>> # Single "nodes" table with a "node_type" column
+    /// >>> config = (
+    /// ...     GraphConfigBuilder()
+    /// ...     .with_unified_node("nodes", "Person", "id", "node_type")
+    /// ...     .with_unified_node("nodes", "Company", "id", "node_type")
+    /// ...     .build()
+    /// ... )
+    fn with_unified_node(
+        &self,
+        source_table: &str,
+        label: &str,
+        id_field: &str,
+        label_field: &str,
+    ) -> Self {
+        Self {
+            inner: self
+                .inner
+                .clone()
+                .with_unified_node(source_table, label, id_field, label_field),
+        }
+    }
+
+    /// Add a relationship type mapping from a unified table with a type field
+    ///
+    /// This allows multiple relationship types to be stored in a single table,
+    /// distinguished by a type column. The table filtering is done efficiently
+    /// in Rust/DataFusion rather than Python.
+    ///
+    /// Parameters
+    /// ----------
+    /// source_table : str
+    ///     The name of the unified table containing all relationships
+    /// rel_type : str
+    ///     The relationship type value to filter by
+    /// source_field : str
+    ///     The field containing source node IDs
+    /// target_field : str
+    ///     The field containing target node IDs
+    /// type_field : str
+    ///     The field containing the relationship type
+    ///
+    /// Returns
+    /// -------
+    /// GraphConfigBuilder
+    ///     A new builder with the relationship mapping applied
+    ///
+    /// Example
+    /// -------
+    /// >>> # Single "relationships" table with a "rel_type" column
+    /// >>> config = (
+    /// ...     GraphConfigBuilder()
+    /// ...     .with_unified_node("nodes", "Person", "id", "node_type")
+    /// ...     .with_unified_relationship("relationships", "KNOWS", "source_id", "target_id", "rel_type")
+    /// ...     .with_unified_relationship("relationships", "WORKS_FOR", "source_id", "target_id", "rel_type")
+    /// ...     .build()
+    /// ... )
+    fn with_unified_relationship(
+        &self,
+        source_table: &str,
+        rel_type: &str,
+        source_field: &str,
+        target_field: &str,
+        type_field: &str,
+    ) -> Self {
+        Self {
+            inner: self.inner.clone().with_unified_relationship(
+                source_table,
+                rel_type,
+                source_field,
+                target_field,
+                type_field,
+            ),
+        }
+    }
+
     /// Build the GraphConfig
     ///
     /// Returns
