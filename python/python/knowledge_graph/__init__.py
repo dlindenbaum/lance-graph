@@ -247,6 +247,168 @@ class KnowledgeGraphBuilder:
 
         return self
 
+    def with_lance_nodes(
+        self,
+        dataset,
+        *,
+        table_name: str = "nodes",
+        id_field: str = "id",
+        label_field: str = "node_type",
+        labels: Optional[list] = None,
+        filter: Optional[str] = None,
+    ) -> KnowledgeGraphBuilder:
+        """Register multiple node types from a Lance dataset with predicate pushdown.
+
+        This method loads data directly from a Lance dataset, applying any
+        filter predicates at the storage layer for maximum efficiency. Use this
+        when your graph data is stored in Lance and you want to filter by
+        case_id, time range, or other criteria.
+
+        Parameters
+        ----------
+        dataset : lance.LanceDataset
+            The Lance dataset containing all nodes.
+        table_name : str
+            The name to register the table under (default: "nodes").
+        id_field : str
+            The field serving as the node identifier (default: "id").
+        label_field : str
+            The field containing the node type/label (default: "node_type").
+        labels : list, optional
+            Specific labels to register. If None, automatically discovers
+            all unique values in the label_field column (after applying filter).
+        filter : str, optional
+            SQL-style filter expression to push down to Lance storage.
+            Example: "case_id = 'case_123'" or "created_at > '2024-01-01'"
+
+        Returns
+        -------
+        KnowledgeGraphBuilder
+            Self for method chaining.
+
+        Example
+        -------
+        >>> import lance
+        >>> ds = lance.dataset("/path/to/nodes.lance")
+        >>> # Filter to only load nodes for a specific case
+        >>> graph = (
+        ...     KnowledgeGraphBuilder()
+        ...     .with_lance_nodes(ds, filter="case_id = 'case_001'")
+        ...     .with_lance_relationships(rels_ds, filter="case_id = 'case_001'")
+        ...     .build()
+        ... )
+        """
+        # Create scanner with optional filter for predicate pushdown
+        if filter is not None:
+            scanner = dataset.scanner(filter=filter)
+        else:
+            scanner = dataset.scanner()
+
+        # Convert to PyArrow table
+        table = scanner.to_table()
+        table = _ensure_table(table_name, table)
+        self._datasets[table_name] = table
+
+        # Auto-discover labels if not provided
+        if labels is None:
+            if label_field not in table.column_names:
+                raise ValueError(
+                    f"Label field '{label_field}' not found in table. "
+                    f"Available columns: {table.column_names}"
+                )
+            labels = table.column(label_field).unique().to_pylist()
+
+        # Register each label as a unified node mapping
+        for label in labels:
+            self._builder = self._builder.with_unified_node(
+                table_name, label, id_field, label_field
+            )
+
+        return self
+
+    def with_lance_relationships(
+        self,
+        dataset,
+        *,
+        table_name: str = "relationships",
+        source_field: str = "source_id",
+        target_field: str = "target_id",
+        type_field: str = "relationship_type",
+        types: Optional[list] = None,
+        filter: Optional[str] = None,
+    ) -> KnowledgeGraphBuilder:
+        """Register multiple relationship types from a Lance dataset with predicate pushdown.
+
+        This method loads data directly from a Lance dataset, applying any
+        filter predicates at the storage layer for maximum efficiency.
+
+        Parameters
+        ----------
+        dataset : lance.LanceDataset
+            The Lance dataset containing all relationships.
+        table_name : str
+            The name to register the table under (default: "relationships").
+        source_field : str
+            The field containing source node IDs (default: "source_id").
+        target_field : str
+            The field containing target node IDs (default: "target_id").
+        type_field : str
+            The field containing the relationship type (default: "relationship_type").
+        types : list, optional
+            Specific relationship types to register. If None, automatically
+            discovers all unique values in the type_field column.
+        filter : str, optional
+            SQL-style filter expression to push down to Lance storage.
+            Example: "case_id = 'case_123'" or "created_at > '2024-01-01'"
+
+        Returns
+        -------
+        KnowledgeGraphBuilder
+            Self for method chaining.
+
+        Example
+        -------
+        >>> import lance
+        >>> nodes_ds = lance.dataset("/path/to/nodes.lance")
+        >>> rels_ds = lance.dataset("/path/to/relationships.lance")
+        >>> # Filter to only load data for a specific case
+        >>> graph = (
+        ...     KnowledgeGraphBuilder()
+        ...     .with_lance_nodes(nodes_ds, filter="case_id = 'case_001'")
+        ...     .with_lance_relationships(rels_ds, filter="case_id = 'case_001'")
+        ...     .build()
+        ... )
+        >>> # Query the filtered graph
+        >>> result = graph.run("MATCH (p:Person)-[:KNOWS]->(q:Person) RETURN p.name, q.name")
+        """
+        # Create scanner with optional filter for predicate pushdown
+        if filter is not None:
+            scanner = dataset.scanner(filter=filter)
+        else:
+            scanner = dataset.scanner()
+
+        # Convert to PyArrow table
+        table = scanner.to_table()
+        table = _ensure_table(table_name, table)
+        self._datasets[table_name] = table
+
+        # Auto-discover types if not provided
+        if types is None:
+            if type_field not in table.column_names:
+                raise ValueError(
+                    f"Type field '{type_field}' not found in table. "
+                    f"Available columns: {table.column_names}"
+                )
+            types = table.column(type_field).unique().to_pylist()
+
+        # Register each type as a unified relationship mapping
+        for rel_type in types:
+            self._builder = self._builder.with_unified_relationship(
+                table_name, rel_type, source_field, target_field, type_field
+            )
+
+        return self
+
     def build(self) -> KnowledgeGraph:
         """Materialize the ``KnowledgeGraph`` instance."""
         config = self._builder.build()

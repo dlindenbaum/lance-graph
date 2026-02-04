@@ -141,6 +141,95 @@ def example_high_level_api():
     print(f"Result: {result.to_pydict()}\n")
 
 
+def example_lance_with_filter():
+    """Use Lance datasets with predicate pushdown for filtering by case."""
+    print("=== Lance Dataset Example (with predicate pushdown) ===\n")
+
+    try:
+        import lance
+        import tempfile
+        import os
+    except ImportError:
+        print("Note: This example requires 'lance' package. pip install lance")
+        return
+
+    from knowledge_graph import KnowledgeGraphBuilder
+
+    # Create sample data with case_id for multi-tenant storage
+    nodes_data = pa.table({
+        "id": [1, 2, 3, 4, 5, 6, 7, 8],
+        "name": ["Alice", "Bob", "Acme", "TechStart", "Carol", "Dave", "OtherCorp", "Ed"],
+        "node_type": ["Person", "Person", "Company", "Company", "Person", "Person", "Company", "Person"],
+        "case_id": ["case_001", "case_001", "case_001", "case_001", "case_002", "case_002", "case_002", "case_002"],
+    })
+
+    rels_data = pa.table({
+        "source_id": [1, 2, 1, 5, 6, 5],
+        "target_id": [2, 3, 3, 6, 7, 7],
+        "rel_type": ["KNOWS", "WORKS_FOR", "WORKS_FOR", "KNOWS", "WORKS_FOR", "WORKS_FOR"],
+        "case_id": ["case_001", "case_001", "case_001", "case_002", "case_002", "case_002"],
+    })
+
+    # Write to temporary Lance datasets
+    with tempfile.TemporaryDirectory() as tmpdir:
+        nodes_path = os.path.join(tmpdir, "nodes.lance")
+        rels_path = os.path.join(tmpdir, "relationships.lance")
+
+        lance.write_dataset(nodes_data, nodes_path)
+        lance.write_dataset(rels_data, rels_path)
+
+        # Open the datasets
+        nodes_ds = lance.dataset(nodes_path)
+        rels_ds = lance.dataset(rels_path)
+
+        print(f"Total nodes in dataset: {nodes_ds.count_rows()}")
+        print(f"Total relationships in dataset: {rels_ds.count_rows()}")
+
+        # Build graph for case_001 only - filter is pushed down to Lance!
+        print("\n--- Building graph for case_001 ---")
+        graph = (
+            KnowledgeGraphBuilder()
+            .with_lance_nodes(
+                nodes_ds,
+                id_field="id",
+                label_field="node_type",
+                filter="case_id = 'case_001'"  # Predicate pushdown!
+            )
+            .with_lance_relationships(
+                rels_ds,
+                source_field="source_id",
+                target_field="target_id",
+                type_field="rel_type",
+                filter="case_id = 'case_001'"  # Predicate pushdown!
+            )
+            .build()
+        )
+
+        # Only case_001 data is loaded
+        print(f"Nodes loaded for case_001: {len(graph.tables()['nodes'])}")
+        print(f"Relationships loaded for case_001: {len(graph.tables()['relationships'])}")
+
+        # Query the filtered graph
+        print("\nQuery: Find who works for which company in case_001")
+        result = graph.run("MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name, c.name")
+        print(f"Result: {result.to_pydict()}")
+
+        # Now build graph for case_002
+        print("\n--- Building graph for case_002 ---")
+        graph2 = (
+            KnowledgeGraphBuilder()
+            .with_lance_nodes(nodes_ds, filter="case_id = 'case_002'")
+            .with_lance_relationships(rels_ds, filter="case_id = 'case_002'")
+            .build()
+        )
+
+        print(f"Nodes loaded for case_002: {len(graph2.tables()['nodes'])}")
+
+        print("\nQuery: Find who works for which company in case_002")
+        result2 = graph2.run("MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name, c.name")
+        print(f"Result: {result2.to_pydict()}")
+
+
 def main():
     example_low_level_api()
 
@@ -148,6 +237,11 @@ def main():
         example_high_level_api()
     except ImportError as e:
         print(f"Note: High-level API requires knowledge_graph package: {e}")
+
+    try:
+        example_lance_with_filter()
+    except Exception as e:
+        print(f"Note: Lance example error: {e}")
 
 
 if __name__ == "__main__":
