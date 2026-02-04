@@ -10,6 +10,10 @@ description = "Graph query engine for Lance datasets with Cypher support"
 keywords = ["lance", "graph", "cypher", "query", "datafusion"]
 categories = ["database", "data-structures", "science"]
 
+[features]
+default = []
+lance = ["dep:lance"]
+
 [dependencies]
 arrow = { version = "55.2", features = ["prettyprint"] }
 arrow-array = "55.2"
@@ -28,6 +32,7 @@ datafusion-expr = "49.0.2"
 datafusion-sql = "49.0.2"
 datafusion-functions-aggregate = "49.0.2"
 lance-core = "0.37.0"
+lance = { version = "0.37.0", optional = true }
 nom = "7.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

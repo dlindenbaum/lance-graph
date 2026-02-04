@@ -89,3 +89,87 @@ impl TableSource for SimpleTableSource {
         self.schema.clone()
     }
 }
+
+/// A catalog backed by Lance datasets with full predicate pushdown support.
+///
+/// This catalog wraps Lance datasets as DataFusion TableProviders, enabling
+/// predicate pushdown all the way to the Lance storage layer. This is more
+/// efficient than loading data into memory first.
+///
+/// # Example
+///
+/// ```ignore
+/// use lance::dataset::Dataset;
+/// use lance_graph::source_catalog::LanceCatalog;
+///
+/// let nodes_ds = Dataset::open("/path/to/nodes.lance").await?;
+/// let rels_ds = Dataset::open("/path/to/relationships.lance").await?;
+///
+/// let catalog = LanceCatalog::new()
+///     .with_node_dataset("nodes", nodes_ds)
+///     .with_relationship_dataset("relationships", rels_ds);
+/// ```
+///
+/// # Feature Flag
+///
+/// This type is only available when the `lance` feature is enabled:
+/// ```toml
+/// lance-graph = { version = "0.1", features = ["lance"] }
+/// ```
+#[cfg(feature = "lance")]
+pub struct LanceCatalog {
+    node_datasets: HashMap<String, Arc<lance::dataset::Dataset>>,
+    rel_datasets: HashMap<String, Arc<lance::dataset::Dataset>>,
+}
+
+#[cfg(feature = "lance")]
+impl LanceCatalog {
+    pub fn new() -> Self {
+        Self {
+            node_datasets: HashMap::new(),
+            rel_datasets: HashMap::new(),
+        }
+    }
+
+    /// Add a Lance dataset as a node source.
+    pub fn with_node_dataset(
+        mut self,
+        name: impl Into<String>,
+        dataset: Arc<lance::dataset::Dataset>,
+    ) -> Self {
+        self.node_datasets.insert(name.into(), dataset);
+        self
+    }
+
+    /// Add a Lance dataset as a relationship source.
+    pub fn with_relationship_dataset(
+        mut self,
+        name: impl Into<String>,
+        dataset: Arc<lance::dataset::Dataset>,
+    ) -> Self {
+        self.rel_datasets.insert(name.into(), dataset);
+        self
+    }
+}
+
+#[cfg(feature = "lance")]
+impl Default for LanceCatalog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "lance")]
+impl GraphSourceCatalog for LanceCatalog {
+    fn node_source(&self, label: &str) -> Option<Arc<dyn TableSource>> {
+        self.node_datasets
+            .get(label)
+            .map(|ds| Arc::clone(ds) as Arc<dyn TableSource>)
+    }
+
+    fn relationship_source(&self, rel_type: &str) -> Option<Arc<dyn TableSource>> {
+        self.rel_datasets
+            .get(rel_type)
+            .map(|ds| Arc::clone(ds) as Arc<dyn TableSource>)
+    }
+}

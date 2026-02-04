@@ -318,6 +318,148 @@ impl CypherQuery {
         })
     }
 
+    /// Execute query against Lance datasets with full predicate pushdown
+    ///
+    /// This method provides the most efficient way to query Lance-backed graph data.
+    /// It registers Lance datasets directly as DataFusion TableProviders, enabling
+    /// ALL predicates (including type filters and custom filters) to be pushed down
+    /// to the Lance storage layer.
+    ///
+    /// # Performance Benefits
+    ///
+    /// Unlike `execute_datafusion` which loads data into memory first, this method:
+    /// - Only reads rows that match the query predicates from disk
+    /// - Pushes type filters (e.g., `node_type = 'Person'`) to Lance
+    /// - Pushes custom filters (e.g., `case_id = 'case_001'`) to Lance
+    /// - Minimizes memory usage by streaming results
+    ///
+    /// # Arguments
+    /// * `dataset_uris` - HashMap of table name to Lance dataset URI
+    ///
+    /// # Returns
+    /// Query results as an Arrow RecordBatch
+    ///
+    /// # Errors
+    /// Returns error if:
+    /// - GraphConfig is not set
+    /// - Lance datasets cannot be opened
+    /// - Query execution fails
+    ///
+    /// # Example
+    /// ```ignore
+    /// use std::collections::HashMap;
+    /// use lance_graph::{CypherQuery, GraphConfig};
+    ///
+    /// // Configure graph with unified tables
+    /// let config = GraphConfig::builder()
+    ///     .with_unified_node("nodes", "Person", "id", "node_type")
+    ///     .with_unified_node("nodes", "Company", "id", "node_type")
+    ///     .with_unified_relationship("relationships", "KNOWS", "src_id", "dst_id", "rel_type")
+    ///     .build()?;
+    ///
+    /// // Provide Lance dataset URIs
+    /// let mut uris = HashMap::new();
+    /// uris.insert("nodes".to_string(), "/path/to/nodes.lance".to_string());
+    /// uris.insert("relationships".to_string(), "/path/to/rels.lance".to_string());
+    ///
+    /// // Execute with full predicate pushdown
+    /// let query = CypherQuery::new("MATCH (p:Person)-[:KNOWS]->(q) RETURN p.name")?
+    ///     .with_config(config);
+    /// let result = query.execute_with_lance(uris).await?;
+    /// // The filter `node_type = 'Person'` is pushed down to Lance!
+    /// ```
+    ///
+    /// # Feature Flag
+    ///
+    /// This method is only available when the `lance` feature is enabled:
+    /// ```toml
+    /// lance-graph = { version = "0.1", features = ["lance"] }
+    /// ```
+    #[cfg(feature = "lance")]
+    pub async fn execute_with_lance(
+        &self,
+        dataset_uris: HashMap<String, String>,
+    ) -> Result<arrow::record_batch::RecordBatch> {
+        use datafusion::execution::context::SessionContext;
+        use std::sync::Arc;
+
+        let config = self.require_config()?;
+
+        // Create a new SessionContext
+        let ctx = SessionContext::new();
+
+        // Open and register each Lance dataset
+        for (table_name, uri) in &dataset_uris {
+            let dataset = lance::dataset::Dataset::open(uri)
+                .await
+                .map_err(|e| GraphError::ConfigError {
+                    message: format!("Failed to open Lance dataset '{}' at '{}': {}", table_name, uri, e),
+                    location: snafu::Location::new(file!(), line!(), column!()),
+                })?;
+
+            ctx.register_table(table_name, Arc::new(dataset))
+                .map_err(|e| GraphError::ConfigError {
+                    message: format!("Failed to register Lance dataset '{}': {}", table_name, e),
+                    location: snafu::Location::new(file!(), line!(), column!()),
+                })?;
+        }
+
+        // Build catalog from the SessionContext
+        // This creates table sources that will push predicates down to Lance
+        let mut catalog = crate::source_catalog::InMemoryCatalog::new();
+
+        // Register node sources - use source_table if specified, otherwise use label
+        for (label, mapping) in &config.node_mappings {
+            let source_table = mapping
+                .source_table
+                .as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or(label.as_str());
+
+            let table_provider = ctx
+                .table_provider(source_table)
+                .await
+                .map_err(|e| GraphError::ConfigError {
+                    message: format!(
+                        "Node source table '{}' (for label '{}') not found: {}",
+                        source_table, label, e
+                    ),
+                    location: snafu::Location::new(file!(), line!(), column!()),
+                })?;
+
+            let table_source = Arc::new(datafusion::datasource::DefaultTableSource::new(table_provider));
+            catalog = catalog.with_node_source(source_table, table_source);
+        }
+
+        // Register relationship sources - use source_table if specified, otherwise use type
+        for (rel_type, mapping) in &config.relationship_mappings {
+            let source_table = mapping
+                .source_table
+                .as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or(rel_type.as_str());
+
+            let table_provider = ctx
+                .table_provider(source_table)
+                .await
+                .map_err(|e| GraphError::ConfigError {
+                    message: format!(
+                        "Relationship source table '{}' (for type '{}') not found: {}",
+                        source_table, rel_type, e
+                    ),
+                    location: snafu::Location::new(file!(), line!(), column!()),
+                })?;
+
+            let table_source = Arc::new(datafusion::datasource::DefaultTableSource::new(table_provider));
+            catalog = catalog.with_relationship_source(source_table, table_source);
+        }
+
+        // Execute using the catalog and context
+        // The type filters added by scan_ops will be pushed down to Lance!
+        self.execute_with_catalog_and_context(Arc::new(catalog), ctx)
+            .await
+    }
+
     /// Explain the query execution plan using in-memory datasets
     ///
     /// Returns a formatted string showing the query execution plan at different stages:
