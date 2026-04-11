@@ -84,9 +84,9 @@ def _make_entity_table(n: int = 100) -> pa.Table:
     return pa.table(
         {
             "entity_id": pa.array(entity_ids, type=pa.int64()),
-            "name": pa.array(names, type=pa.large_string()),
+            "name": pa.array(names, type=pa.string()),        # pa.string() = utf8
             "score": pa.array(scores, type=pa.float64()),
-            "category": pa.array(categories, type=pa.large_string()),
+            "category": pa.array(categories, type=pa.string()),  # not large_string
         }
     )
 
@@ -115,22 +115,28 @@ def _register_ffi(
 ) -> None:
     """Register *ds* into *ctx* via FFILanceTableProvider.
 
+    API (lance 4.0.0 + datafusion 52.3.0):
+        from lance.lance import FFILanceTableProvider
+        provider = FFILanceTableProvider(ds)
+        ctx.register_table(table_name, provider)
+
     Skips the test if the required APIs are not available in the installed
     versions of lance / datafusion.
     """
     try:
-        provider = ds.to_table_provider()
-    except AttributeError:
+        from lance.lance import FFILanceTableProvider  # noqa: PLC0415
+    except ImportError:
         pytest.skip(
-            f"lance {lance.__version__}: LanceDataset.to_table_provider() missing. "
+            f"lance {lance.__version__}: lance.lance.FFILanceTableProvider not found. "
             "Cannot test FFI pushdown."
         )
+    provider = FFILanceTableProvider(ds)
     try:
-        ctx.register_table_provider(table_name, provider)
+        ctx.register_table(table_name, provider)
     except AttributeError:
         pytest.skip(
             f"datafusion {datafusion.__version__}: "
-            "SessionContext.register_table_provider() missing. "
+            "SessionContext.register_table() missing. "
             "Cannot test FFI pushdown."
         )
 
